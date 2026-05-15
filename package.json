@@ -36,6 +36,7 @@
     "@types/node": "^22.10.0",
     "@types/qrcode-terminal": "^0.12.2",
     "tsup": "^8.3.5",
+    "tsx": "^4.22.0",
     "typescript": "^5.6.3",
     "vitest": "^2.1.8"
   },

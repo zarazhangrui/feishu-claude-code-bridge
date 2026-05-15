@@ -1,13 +1,16 @@
 import dns from 'node:dns';
+import { mkdir } from 'node:fs/promises';
+import { homedir } from 'node:os';
+import { dirname, join, resolve } from 'node:path';
 import { createInterface } from 'node:readline';
 import pkg from '../../../package.json';
-import { ClaudeAdapter } from '../../agent/claude/adapter';
+import { createAgent } from '../../agent';
 import { startChannel, type BridgeChannel } from '../../bot/channel';
 import { runRegistrationWizard } from '../../bot/wizard';
 import type { Controls } from '../../commands';
-import { paths } from '../../config/paths';
-import type { AppConfig } from '../../config/schema';
-import { isComplete } from '../../config/schema';
+import { configurePaths, paths } from '../../config/paths';
+import type { AgentKind, AppConfig } from '../../config/schema';
+import { getAgentKind, isComplete } from '../../config/schema';
 import { loadConfig, saveConfig } from '../../config/store';
 import { gcOldLogs, log } from '../../core/logger';
 import { gcMediaCache } from '../../media/cache';
@@ -44,10 +47,50 @@ const MEDIA_GC_MAX_AGE_MS = 24 * 60 * 60 * 1000;
 
 export interface StartOptions {
   config?: string;
+  /** Shortcut to select agent + default data dir. Ignored if --config is also
+   *  passed; otherwise `--codex` → ~/.lark-codex/, `--claude` (or omitted) →
+   *  ~/.lark-channel/. Persisted to preferences.agent in the saved config so
+   *  subsequent runs without the flag pick up the same agent. */
+  agent?: AgentKind;
+}
+
+/**
+ * Resolve the config path + data dir from the start options.
+ *
+ * Precedence:
+ *   1. Explicit -c <path>  → data dir = dirname(path). agent flag still
+ *      applies (persists to preferences.agent) but does NOT change the path.
+ *   2. --codex             → ~/.lark-codex/config.json
+ *   3. --claude or nothing → ~/.lark-channel/config.json  (default)
+ */
+function resolveDataLocation(opts: StartOptions): {
+  configPath: string;
+  customized: boolean;
+} {
+  if (opts.config) {
+    return { configPath: resolve(opts.config), customized: true };
+  }
+  if (opts.agent === 'codex') {
+    return {
+      configPath: join(homedir(), '.lark-codex', 'config.json'),
+      customized: true,
+    };
+  }
+  return { configPath: paths.configFile, customized: false };
 }
 
 export async function runStart(opts: StartOptions): Promise<void> {
-  const configPath = opts.config ?? paths.configFile;
+  // The data dir for this process is the directory containing the config
+  // file. All sessions / workspaces / logs / media / processes.json land
+  // there, so multiple `start` instances (one per agent / bot) stay fully
+  // isolated. --codex picks ~/.lark-codex by default; --claude (or no flag)
+  // picks ~/.lark-channel.
+  const { configPath, customized } = resolveDataLocation(opts);
+  if (customized) {
+    configurePaths(dirname(configPath));
+  }
+  await mkdir(paths.appDir, { recursive: true });
+
   const existing = await loadConfig(configPath);
 
   let cfg: AppConfig;
@@ -60,10 +103,40 @@ export async function runStart(opts: StartOptions): Promise<void> {
     printScopeReminder();
   }
 
-  const agent = new ClaudeAdapter();
+  // Persist agent shortcut into preferences so subsequent runs from this
+  // same data dir don't need the flag again. Also bail clearly if the user
+  // asks for an agent that doesn't match the on-disk preference — we don't
+  // silently flip it, because preferences.agent on disk is the source of
+  // truth for `/status` etc., and a mismatch usually means the user pointed
+  // the shortcut at the wrong data dir.
+  if (opts.agent) {
+    const onDisk = cfg.preferences?.agent;
+    if (onDisk && onDisk !== opts.agent) {
+      console.error(
+        `✗ ${configPath} 里 preferences.agent 是 "${onDisk}"，但你用了 --${opts.agent}。`,
+      );
+      console.error(`  改 config 或换 --${onDisk} 启动。`);
+      process.exit(1);
+    }
+    if (onDisk !== opts.agent) {
+      cfg = {
+        ...cfg,
+        preferences: { ...(cfg.preferences ?? {}), agent: opts.agent },
+      };
+      await saveConfig(cfg, configPath);
+      console.log(`已写入 preferences.agent = "${opts.agent}"\n`);
+    }
+  }
+
+  const agentKind = getAgentKind(cfg);
+  const agent = createAgent(agentKind);
   if (!(await agent.isAvailable())) {
-    console.error('✗ 未找到 claude CLI。请先安装 Claude Code：');
-    console.error('  https://docs.anthropic.com/en/docs/claude-code/quickstart');
+    if (agentKind === 'codex') {
+      console.error('✗ 未找到 codex CLI。请先安装 OpenAI Codex CLI 并 `codex login`。');
+    } else {
+      console.error('✗ 未找到 claude CLI。请先安装 Claude Code：');
+      console.error('  https://docs.anthropic.com/en/docs/claude-code/quickstart');
+    }
     process.exit(1);
   }
 

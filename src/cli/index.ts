@@ -15,9 +15,18 @@ program
   .command('start')
   .description('Start the bot (runs first-run wizard if bot config is missing)')
   .option('-c, --config <path>', 'path to config file')
-  .action(async (opts: { config?: string }) => {
-    await runStart(opts);
-  });
+  .option('--claude', 'shortcut: use ~/.lark-channel/ data dir + agent=claude (default)')
+  .option('--codex', 'shortcut: use ~/.lark-codex/ data dir + agent=codex')
+  .action(
+    async (opts: { config?: string; claude?: boolean; codex?: boolean }) => {
+      if (opts.claude && opts.codex) {
+        console.error('✗ --claude 和 --codex 不能同时指定');
+        process.exit(1);
+      }
+      const agent = opts.codex ? 'codex' : opts.claude ? 'claude' : undefined;
+      await runStart({ config: opts.config, agent });
+    },
+  );
 
 program
   .command('migrate')

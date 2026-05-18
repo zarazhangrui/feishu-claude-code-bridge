@@ -69,6 +69,27 @@ sender_name: ...
 \`\`\`
 `;
 
+/**
+ * On Windows, npm-installed CLIs are `.cmd` wrappers that require `shell:true`
+ * to execute via Node's spawn. Using `shell:true` for the full agent run breaks
+ * argument passing (cmd.exe concatenates args, mangling long prompts and special
+ * characters). Instead we resolve the actual `.exe` that the wrapper calls.
+ *
+ * The Claude Code npm package always ships a native binary at:
+ *   <npm-global-prefix>\node_modules\@anthropic-ai\claude-code\bin\claude.exe
+ *
+ * The default npm global prefix on Windows is %APPDATA%\npm.
+ */
+function resolveDefaultBinary(): string {
+  if (process.platform === 'win32') {
+    const appData = process.env.APPDATA;
+    if (appData) {
+      return `${appData}\\npm\\node_modules\\@anthropic-ai\\claude-code\\bin\\claude.exe`;
+    }
+  }
+  return 'claude';
+}
+
 export class ClaudeAdapter implements AgentAdapter {
   readonly id = 'claude';
   readonly displayName = 'Claude Code';
@@ -76,7 +97,7 @@ export class ClaudeAdapter implements AgentAdapter {
   private readonly binary: string;
 
   constructor(opts: ClaudeAdapterOptions = {}) {
-    this.binary = opts.binary ?? 'claude';
+    this.binary = opts.binary ?? resolveDefaultBinary();
   }
 
   async isAvailable(): Promise<boolean> {

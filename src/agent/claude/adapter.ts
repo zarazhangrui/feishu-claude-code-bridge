@@ -10,6 +10,17 @@ export interface ClaudeAdapterOptions {
   binary?: string;
 }
 
+const IS_WIN = process.platform === 'win32';
+
+function winSpawn(
+  cmd: string,
+  args: readonly string[],
+  opts: Parameters<typeof spawn>[2],
+): ReturnType<typeof spawn> {
+  if (!IS_WIN) return spawn(cmd, args, opts);
+  return spawn('cmd.exe', ['/c', cmd, ...args], opts);
+}
+
 type ClaudeChild = ChildProcessByStdio<null, Readable, Readable>;
 
 const BRIDGE_SYSTEM_PROMPT = `# lark-channel-bridge 运行约定
@@ -96,7 +107,7 @@ export class ClaudeAdapter implements AgentAdapter {
 
   async isAvailable(): Promise<boolean> {
     return new Promise((resolve) => {
-      const child = spawn(this.binary, ['--version'], { stdio: 'ignore' });
+      const child = winSpawn(this.binary, ['--version'], { stdio: 'ignore' });
       child.on('error', () => resolve(false));
       child.on('exit', (code) => resolve(code === 0));
     });
@@ -117,7 +128,7 @@ export class ClaudeAdapter implements AgentAdapter {
     if (opts.sessionId) args.push('--resume', opts.sessionId);
     if (opts.model) args.push('--model', opts.model);
 
-    const child = spawn(this.binary, args, {
+    const child = winSpawn(this.binary, args, {
       cwd: opts.cwd,
       env: { ...process.env, LARK_CHANNEL: '1' },
       stdio: ['ignore', 'pipe', 'pipe'],

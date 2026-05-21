@@ -67,6 +67,7 @@ export interface SecretsConfig {
  * `markdown`. See `messageReplyMigrated` for the auto-coercion logic.
  */
 export type MessageReplyMode = 'card' | 'markdown' | 'text';
+export type AgentBackend = 'claude' | 'coco';
 
 /**
  * Access control settings. All three lists default to "no restriction" when
@@ -90,6 +91,10 @@ export interface AppAccess {
 }
 
 export interface AppPreferences {
+  /** Agent backend to run behind the bridge. Default 'claude'. */
+  agentBackend?: AgentBackend;
+  /** Optional binary name/path when agentBackend='coco'. */
+  cocoBinary?: string;
   /** Reply rendering mode for IM (group/p2p) messages. Default 'card'. */
   messageReply?: MessageReplyMode;
   /**
@@ -198,6 +203,15 @@ export function getMessageReplyMode(cfg: AppConfig): MessageReplyMode {
   }
   if (raw === 'card' || raw === 'markdown' || raw === 'text') return raw;
   return 'markdown';
+}
+
+export function getAgentBackend(cfg: AppConfig): AgentBackend {
+  return cfg.preferences?.agentBackend === 'coco' ? 'coco' : 'claude';
+}
+
+export function getCocoBinary(cfg: AppConfig): string | undefined {
+  const raw = cfg.preferences?.cocoBinary?.trim();
+  return raw ? raw : undefined;
 }
 
 /** Resolve the show-tool-calls preference with default fallback. */

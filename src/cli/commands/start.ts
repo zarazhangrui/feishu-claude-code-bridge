@@ -1,14 +1,15 @@
 import dns from 'node:dns';
 import { createInterface } from 'node:readline';
 import pkg from '../../../package.json';
-import { ClaudeAdapter } from '../../agent/claude/adapter';
+import type { AgentAdapter } from '../../agent';
+import { ClaudeAdapter, CocoAdapter } from '../../agent';
 import { startChannel, type BridgeChannel } from '../../bot/channel';
 import { runRegistrationWizard } from '../../bot/wizard';
 import type { Controls } from '../../commands';
 import { setSecret } from '../../config/keystore';
 import { paths } from '../../config/paths';
 import type { AppConfig } from '../../config/schema';
-import { isComplete, secretKeyForApp } from '../../config/schema';
+import { getAgentBackend, getCocoBinary, isComplete, secretKeyForApp } from '../../config/schema';
 import {
   buildEncryptedAccountConfig,
   ensureSecretsGetterWrapper,
@@ -73,10 +74,9 @@ export async function runStart(opts: StartOptions): Promise<void> {
     printScopeReminder();
   }
 
-  const agent = new ClaudeAdapter();
+  let agent = createAgent(cfg);
   if (!(await agent.isAvailable())) {
-    console.error('✗ 未找到 claude CLI。请先安装 Claude Code：');
-    console.error('  https://docs.anthropic.com/en/docs/claude-code/quickstart');
+    printAgentMissing(agent, cfg);
     process.exit(1);
   }
 
@@ -151,6 +151,11 @@ export async function runStart(opts: StartOptions): Promise<void> {
         }
         const next = await loadConfig(configPath);
         if (!isComplete(next)) throw new Error('config incomplete after change');
+        const nextAgent = createAgent(next);
+        if (!(await nextAgent.isAvailable())) {
+          printAgentMissing(nextAgent, next);
+          throw new Error(`agent backend unavailable: ${nextAgent.id}`);
+        }
         controls.cfg = next;
         // Keep the registry in sync so /ps reflects the new app after an
         // /account change. Same process id, new app fields. botName is
@@ -166,7 +171,8 @@ export async function runStart(opts: StartOptions): Promise<void> {
         console.log(
           `[restart] reconnecting with appId=${next.accounts.app.id} tenant=${next.accounts.app.tenant}...`,
         );
-        bridge = await startChannel({ cfg: next, agent, sessions, workspaces, controls });
+        bridge = await startChannel({ cfg: next, agent: nextAgent, sessions, workspaces, controls });
+        agent = nextAgent;
         const restartedBotName = bridge.channel.botIdentity?.name;
         if (restartedBotName) {
           await updateEntry(entry.id, { botName: restartedBotName }).catch((err) =>
@@ -259,6 +265,24 @@ async function resolveConflict(
   } finally {
     rl.close();
   }
+}
+
+
+function createAgent(cfg: AppConfig): AgentAdapter {
+  if (getAgentBackend(cfg) === 'coco') {
+    return new CocoAdapter({ binary: getCocoBinary(cfg) });
+  }
+  return new ClaudeAdapter();
+}
+
+function printAgentMissing(agent: AgentAdapter, cfg: AppConfig): void {
+  if (agent.id === 'coco') {
+    const binary = getCocoBinary(cfg) ?? 'coco';
+    console.error(`✗ 未找到 coco CLI（当前配置: ${binary}）。请先安装 Coco / traecli，或检查 preferences.cocoBinary。`);
+    return;
+  }
+  console.error('✗ 未找到 claude CLI。请先安装 Claude Code：');
+  console.error('  https://docs.anthropic.com/en/docs/claude-code/quickstart');
 }
 
 function formatAgo(ms: number): string {

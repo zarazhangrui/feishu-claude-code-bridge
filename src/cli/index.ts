@@ -85,41 +85,6 @@ secrets
     await runSecretsRemove(opts.appId);
   });
 
-program
-  .command('status')
-  .description('Show runtime status (WS connection, agent availability)')
-  .action(async () => {
-    console.log('status: not implemented yet');
-  });
-
-program
-  .command('doctor')
-  .description('Check config, claude CLI, and required platform scopes')
-  .action(async () => {
-    console.log('doctor: not implemented yet');
-  });
-
-program
-  .command('handover <text>')
-  .description('Hand over a terminal Claude Code session to Feishu')
-  .action(async (_text: string) => {
-    console.log('handover: not implemented yet');
-  });
-
-program
-  .command('workspace <action>')
-  .description('Manage saved workspaces: list | add | remove | default')
-  .action(async (_action: string) => {
-    console.log('workspace: not implemented yet');
-  });
-
-program
-  .command('service <action> <type>')
-  .description('Install or uninstall autostart service: launchd | systemd')
-  .action(async (_action: string, _type: string) => {
-    console.log('service: not implemented yet');
-  });
-
 program.parseAsync(process.argv).catch((err: unknown) => {
   console.error(err);
   process.exit(1);

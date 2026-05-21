@@ -54,8 +54,6 @@ lark-channel-bridge --help                列所有命令
 
 > 多开同一个 app 时，开放平台会把事件随机推到其中一个长连接。`start` 启动前会检测同 app 已有的进程，TTY 下提示 `[c]ontinue / [k]ill old / [a]bort` 三选；非 TTY 只 warn 并继续。
 
-其它命令（`status` / `doctor` / `handover` / `workspace` / `service`）是占位，后续版本补。
-
 ### 在飞书里用的斜杠命令
 
 | 命令 | 作用 |

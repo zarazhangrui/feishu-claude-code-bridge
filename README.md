@@ -54,8 +54,6 @@ lark-channel-bridge --help                List all commands
 
 > When the same app is started multiple times, Lark's open platform routes events to one of the live WebSocket connections at random. `start` detects existing processes for the same app and (in a TTY) prompts: `[c]ontinue / [k]ill old / [a]bort`. In non-TTY mode it warns and continues.
 
-`status` / `doctor` / `handover` / `workspace` / `service` are placeholders, planned for later releases.
-
 ### Slash commands inside Feishu / Lark
 
 | Command | Effect |

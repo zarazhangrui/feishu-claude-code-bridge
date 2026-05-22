@@ -21,6 +21,7 @@ import { tryHandleCommand, type Controls } from '../commands';
 import type { AppConfig } from '../config/schema';
 import {
   getAgentStopGraceMs,
+  getDefaultModel,
   getMaxConcurrentRuns,
   getMessageReplyMode,
   getRequireMentionInGroup,
@@ -510,10 +511,16 @@ async function runAgentBatch(deps: RunBatchDeps): Promise<void> {
     }
   }
 
+  // Resolve model: scope override (set via /model) wins over global default
+  // (`preferences.defaultModel`). Both undefined → claude picks its own.
+  // Resolved alias is logged inside agent.run via the spawn event.
+  const model = sessions.getModel(scope) ?? getDefaultModel(controls.cfg);
+
   const run = agent.run({
     prompt,
     sessionId: resumeFrom,
     cwd,
+    model,
     stopGraceMs: getAgentStopGraceMs(controls.cfg),
   });
   const handle = activeRuns.register(scope, run);

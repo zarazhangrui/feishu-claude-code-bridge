@@ -14,6 +14,12 @@ export interface SessionEntry {
    * scope, undefined = follow global default. /new clears the whole entry,
    * so this resets to "follow global" when the user starts a new session. */
   idleTimeoutMinutes?: number;
+  /** Per-scope model override. The string is passed verbatim to
+   * `claude --model`. Undefined = follow global default
+   * (`preferences.defaultModel`), or fall through to claude's own default
+   * when neither is set. Like idle-timeout, this survives across runs and
+   * is cleared by /new. */
+  model?: string;
 }
 
 type SessionMap = Record<string, SessionEntry>;
@@ -43,13 +49,15 @@ export class SessionStore {
         const cwd = typeof entry.cwd === 'string' ? entry.cwd : undefined;
         const idleTimeoutMinutes =
           typeof entry.idleTimeoutMinutes === 'number' ? entry.idleTimeoutMinutes : undefined;
+        const model = typeof entry.model === 'string' && entry.model ? entry.model : undefined;
         const hasSession = sessionId !== undefined && cwd !== undefined;
-        if (!hasSession && idleTimeoutMinutes === undefined) continue;
+        if (!hasSession && idleTimeoutMinutes === undefined && model === undefined) continue;
         this.data[chatId] = {
           ...(sessionId !== undefined ? { sessionId } : {}),
           ...(cwd !== undefined ? { cwd } : {}),
           updatedAt: entry.updatedAt,
           ...(idleTimeoutMinutes !== undefined ? { idleTimeoutMinutes } : {}),
+          ...(model !== undefined ? { model } : {}),
         };
       }
     } catch (err) {
@@ -75,8 +83,9 @@ export class SessionStore {
   }
 
   set(chatId: string, sessionId: string, cwd: string): void {
-    // Preserve idleTimeoutMinutes across run starts — it's a per-scope
-    // preference, not per-run-instance state. /new (clear) wipes it.
+    // Preserve per-scope preferences across run starts — idle-timeout and
+    // model are scope state, not per-run-instance state. /new (clear) wipes
+    // both.
     const prev = this.data[chatId];
     this.data[chatId] = {
       sessionId,
@@ -85,6 +94,7 @@ export class SessionStore {
       ...(prev?.idleTimeoutMinutes !== undefined
         ? { idleTimeoutMinutes: prev.idleTimeoutMinutes }
         : {}),
+      ...(prev?.model !== undefined ? { model: prev.model } : {}),
     };
     this.schedulePersist();
   }
@@ -117,6 +127,32 @@ export class SessionStore {
     const prev = this.data[chatId];
     if (!prev || prev.idleTimeoutMinutes === undefined) return false;
     const { idleTimeoutMinutes: _, ...rest } = prev;
+    this.data[chatId] = { ...rest, updatedAt: Date.now() };
+    this.schedulePersist();
+    return true;
+  }
+
+  /** Per-scope model override. `undefined` = follow global default. */
+  getModel(chatId: string): string | undefined {
+    return this.data[chatId]?.model;
+  }
+
+  setModel(chatId: string, model: string): void {
+    const prev = this.data[chatId];
+    this.data[chatId] = {
+      ...(prev ?? { updatedAt: Date.now() }),
+      model,
+      updatedAt: Date.now(),
+    };
+    this.schedulePersist();
+  }
+
+  /** Remove the model override so this scope falls back to the global
+   * default. Returns true if something was actually removed. */
+  clearModelOverride(chatId: string): boolean {
+    const prev = this.data[chatId];
+    if (!prev || prev.model === undefined) return false;
+    const { model: _, ...rest } = prev;
     this.data[chatId] = { ...rest, updatedAt: Date.now() };
     this.schedulePersist();
     return true;

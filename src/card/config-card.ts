@@ -14,24 +14,15 @@ export interface ConfigFormOpts {
   allowedChats: string[];
   /** Current admin open_ids. */
   admins: string[];
-  /**
-   * Chats the bot is currently a member of — populates the
-   * `multi_select_static` group whitelist dropdown. The dropdown is a
-   * convenience; operators can also hand-paste chat_ids in the sibling
-   * text input (handy when this cache is truncated or stale).
-   */
+  /** Chats the bot is currently a member of. Populates the group whitelist
+   * dropdown — operators pick from this rather than typing chat_ids. */
   knownChats: KnownChat[];
-  /**
-   * Current Lark app owner's open_id, if resolved. Shown read-only in the
-   * access section so the operator can see who has unconditional access.
-   */
-  botOwnerId?: string;
 }
 
 /**
- * Wrap a list of card elements in a collapsed-by-default panel. CardKit
- * 2.0's form collector walks nested elements, so inputs inside the panel
- * are still picked up on submit. See wiki/T7EswTtVsiF1hMkCYNxc51ASnZc (P0).
+ * Collapsed-by-default panel for the access-control section. CardKit 2.0's
+ * form collector walks nested elements, so inputs inside the panel are
+ * still picked up on submit.
  */
 function collapsedAccessPanel(title: string, elements: object[]): object {
   return {
@@ -55,7 +46,12 @@ function collapsedAccessPanel(title: string, elements: object[]): object {
   };
 }
 
-/** Build a `multi_select_person` (CardKit 2.0) input. */
+/**
+ * CardKit 2.0 person picker. Has built-in search-by-name (typing in the
+ * dropdown filters the contact list), so we don't need a separate text
+ * fallback. Selected open_ids come back in `form_value` either as a string
+ * array or as `{id|value: string}[]`; submit handler normalizes both.
+ */
 function personPicker(name: string, defaultIds: string[], placeholder: string): object {
   return {
     tag: 'multi_select_person',
@@ -65,7 +61,7 @@ function personPicker(name: string, defaultIds: string[], placeholder: string): 
   };
 }
 
-/** Build a `multi_select_static` input from a fixed list of chat options. */
+/** Group selector populated from the bot's joined chat list. */
 function chatPicker(
   name: string,
   options: KnownChat[],
@@ -87,59 +83,26 @@ function chatPicker(
   };
 }
 
-/** A plain text input used as the fallback path next to each picker. */
-function textFallback(name: string, placeholder: string): object {
-  return {
-    tag: 'input',
-    name,
-    default_value: '',
-    placeholder: { tag: 'plain_text', content: placeholder },
-    input_type: 'text',
-  };
-}
-
 /** Form card for `/config`. */
 export function configFormCard(opts: ConfigFormOpts): object {
-  // Build the access-control section's inner elements, then wrap in a
-  // collapsible_panel. The section is collapsed by default so day-to-day
-  // tweaks (reply mode, concurrency) aren't visually drowned out by the
-  // security knobs most deployments never touch after setup.
-  const ownerLabel = opts.botOwnerId
-    ? `\`${opts.botOwnerId}\`（自动从 Lark 应用 owner 取，可在开发者后台转让）`
-    : '_(未解析 — 初次启动后可能还没取到，或 API 失败；状态可在 /doctor 看)_';
-
   const noChatsHint =
     opts.knownChats.length === 0
-      ? '\n  ⚠️ 当前还没缓存到 bot 所在的群（可能 bridge 刚启动还没拉完，或 bot 还没被拉进任何群），先用下面的"备选"框手填 chat_id'
+      ? '\n  _暂时没有可选的群——bot 还没被拉进任何群，或群列表还在加载。_'
       : '';
 
   const accessElements: object[] = [
     {
       tag: 'markdown',
-      content:
-        '_控制谁能跟 bot 交互、谁能跑敏感命令。**留空 = 不响应**（创建者始终豁免）。下方每个白名单都有"选择器 + 备选文本框"两条入口，选其一即可。_',
+      content: '_控制谁能跟 bot 互动。**留空 = 不响应**_',
     },
     {
       tag: 'markdown',
-      content: `\n**创建者**（运行时获取，不可配置）\n${ownerLabel}`,
+      content: '\n**允许私聊的用户**\n_只有这些用户能在私聊里找 bot。_',
     },
+    personPicker('allowed_users_picker', opts.allowedUsers, '搜索并选择用户'),
     {
       tag: 'markdown',
-      content:
-        '\n**用户白名单**（`allowedUsers`）\n' +
-        '_允许跟 bot 私聊的用户。**空 = 仅创建者 / 管理员可 DM**_',
-    },
-    personPicker('allowed_users_picker', opts.allowedUsers, '选择允许 DM 的用户'),
-    textFallback(
-      'allowed_users_text',
-      '备选：直接填 open_id（逗号分隔，与上方选择器合并去重）',
-    ),
-    {
-      tag: 'markdown',
-      content:
-        '\n**群白名单**（`allowedChats`）\n' +
-        '_bot 只在名单内的群响应（含话题群）。**空 = 不响应任何群**（创建者豁免）_' +
-        noChatsHint,
+      content: `\n**允许响应的群**\n_bot 只在这些群里响应（含话题群）。_${noChatsHint}`,
     },
     chatPicker(
       'allowed_chats_picker',
@@ -147,22 +110,13 @@ export function configFormCard(opts: ConfigFormOpts): object {
       opts.allowedChats,
       '从 bot 所在的群里选',
     ),
-    textFallback(
-      'allowed_chats_text',
-      '备选：直接填 chat_id（逗号分隔。在群里发 `/doctor` 可看 chat_id）',
-    ),
     {
       tag: 'markdown',
       content:
-        '\n**管理员**（`admins`）\n' +
-        '_除创建者外，能跑敏感命令: `/account` `/config` `/exit` `/reconnect` `/doctor` `/cd` `/ws`。管理员同时获得 DM 权。_\n' +
-        '_空 = 仅创建者可跑（与默认 fail-secure 一致）_',
+        '\n**管理员**\n' +
+        '_可以跑敏感命令（如 /config、/exit、/reconnect 等）。管理员也自动获得私聊权限。_',
     },
-    personPicker('admins_picker', opts.admins, '选择管理员'),
-    textFallback(
-      'admins_text',
-      '备选：直接填 open_id（逗号分隔，与上方选择器合并去重）',
-    ),
+    personPicker('admins_picker', opts.admins, '搜索并选择用户'),
   ];
 
   return {
@@ -328,9 +282,8 @@ export function configSavedCard(opts: ConfigFormOpts): object {
             `**run 探活**：\`${opts.runIdleTimeoutMinutes > 0 ? `${opts.runIdleTimeoutMinutes} 分钟` : '关闭'}\`\n` +
             `**群里需要 @ bot**：\`${opts.requireMentionInGroup ? '是' : '否'}\`\n\n` +
             '🔒 **访问控制**\n' +
-            `**创建者**：${opts.botOwnerId ? `\`${opts.botOwnerId.slice(0, 10)}…\`` : '_(未解析)_'}\n` +
-            `**用户白名单**：${summarize(opts.allowedUsers)}\n` +
-            `**群白名单**：${summarize(opts.allowedChats)}\n` +
+            `**允许私聊的用户**：${summarize(opts.allowedUsers)}\n` +
+            `**允许响应的群**：${summarize(opts.allowedChats)}\n` +
             `**管理员**：${summarize(opts.admins)}\n\n` +
             '下条消息开始生效。',
         },

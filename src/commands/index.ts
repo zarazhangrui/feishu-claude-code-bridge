@@ -922,7 +922,6 @@ async function showConfigForm(ctx: CommandContext): Promise<void> {
     allowedChats: access.allowedChats ?? [],
     admins: access.admins ?? [],
     knownChats: ctx.controls.knownChats,
-    botOwnerId: ctx.controls.botOwnerId,
   });
   if (ctx.fromCardAction) await recallMessage(ctx, ctx.msg.messageId);
   await sendManagedCard(ctx.channel, ctx.msg.chatId, card);
@@ -982,46 +981,31 @@ async function submitConfig(ctx: CommandContext): Promise<void> {
   else if (rawRequireMention === 'no') requireMentionInGroup = false;
   else requireMentionInGroup = getRequireMentionInGroup(ctx.controls.cfg);
 
-  // Parse access lists. Each field has two inputs in the form:
-  //   - `<field>_picker`: multi_select_person / multi_select_static. The
-  //     SDK forwards selected IDs either as `string[]` or as `{id|value:
-  //     string}[]` (CardKit hasn't been totally consistent across versions).
-  //     `normalizeIdArray` accepts both.
-  //   - `<field>_text`: a plain comma-separated text input used as a
-  //     fallback (when the picker fails to render, or for IDs not in the
-  //     picker's option set — e.g. chats not in the bot's cached chat list).
-  // We union the two sources and dedupe so either input alone (or both)
-  // works.
+  // Parse access lists. Each whitelist is a single picker
+  // (`multi_select_person` for users/admins, `multi_select_static` for
+  // chats). The SDK forwards selected IDs either as `string[]` or as
+  // `{id|value: string}[]` depending on CardKit version, so we normalize.
   const normalizeIdArray = (raw: unknown): string[] => {
-    if (Array.isArray(raw)) {
-      return raw
-        .map((it) => {
-          if (typeof it === 'string') return it;
-          if (it && typeof it === 'object') {
-            const o = it as { id?: unknown; value?: unknown };
-            if (typeof o.id === 'string') return o.id;
-            if (typeof o.value === 'string') return o.value;
-          }
-          return '';
-        })
-        .filter(Boolean);
-    }
-    return [];
+    if (!Array.isArray(raw)) return [];
+    return [
+      ...new Set(
+        raw
+          .map((it) => {
+            if (typeof it === 'string') return it;
+            if (it && typeof it === 'object') {
+              const o = it as { id?: unknown; value?: unknown };
+              if (typeof o.id === 'string') return o.id;
+              if (typeof o.value === 'string') return o.value;
+            }
+            return '';
+          })
+          .filter(Boolean),
+      ),
+    ];
   };
-  const parseList = (raw: unknown): string[] =>
-    String(raw ?? '')
-      .split(',')
-      .map((s) => s.trim())
-      .filter(Boolean);
-  const merge = (pickerKey: string, textKey: string): string[] => [
-    ...new Set([
-      ...normalizeIdArray(fv[pickerKey]),
-      ...parseList(fv[textKey]),
-    ]),
-  ];
-  const allowedUsers = merge('allowed_users_picker', 'allowed_users_text');
-  const allowedChats = merge('allowed_chats_picker', 'allowed_chats_text');
-  const admins = merge('admins_picker', 'admins_text');
+  const allowedUsers = normalizeIdArray(fv.allowed_users_picker);
+  const allowedChats = normalizeIdArray(fv.allowed_chats_picker);
+  const admins = normalizeIdArray(fv.admins_picker);
 
   // Self-lockout guard: post-redesign, the creator (= Lark app owner) is
   // always exempt from every whitelist, so the operator can always
@@ -1139,7 +1123,6 @@ async function submitConfig(ctx: CommandContext): Promise<void> {
         allowedChats,
         admins,
         knownChats: ctx.controls.knownChats,
-        botOwnerId: ctx.controls.botOwnerId,
       }),
     ).catch((err) =>
       log.warn('command', 'config-save-update-failed', { err: String(err) }),

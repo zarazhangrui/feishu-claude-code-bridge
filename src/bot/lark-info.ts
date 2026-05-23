@@ -41,7 +41,11 @@ export interface AppMeta {
  *
  * Keep this list narrow — only scopes that actually unlock visible UX.
  */
-export const REQUIRED_BOT_SCOPES = ['contact:user.id:readonly'] as const;
+export const REQUIRED_BOT_SCOPES = [
+  // Resolve sender / open_id → name and avatar so the /config access section
+  // can render whitelist members as proper avatar cards instead of bare IDs.
+  'contact:user.base:readonly',
+] as const;
 
 /**
  * Fetch app owner + granted scope list. The Lark developer console allows
@@ -100,6 +104,100 @@ export async function fetchAppMeta(channel: LarkChannel, appId: string): Promise
 export function scopeApplyUrl(appId: string, scopes: readonly string[]): string {
   const scopeParam = encodeURIComponent(scopes.join(','));
   return `https://open.feishu.cn/page/scope-apply?clientID=${encodeURIComponent(appId)}&scopes=${scopeParam}`;
+}
+
+export interface UserCard {
+  openId: string;
+  name?: string;
+  avatarUrl?: string;
+}
+
+export interface ChatCard {
+  chatId: string;
+  name?: string;
+  avatarUrl?: string;
+  memberCount?: number;
+}
+
+/**
+ * Resolve a list of `open_id`s to user cards (name + avatar). Used by
+ * `/config` to render the whitelist as a list of avatar cards instead of
+ * bare IDs. With `contact:user.base:readonly` granted the response carries
+ * `name` and `avatar.avatar_240`; without the scope only `open_id` comes
+ * back and the card falls back to a truncated ID.
+ *
+ * Calls are issued one-by-one (the v3 batch endpoint doesn't exist for
+ * users; only the get-by-id form does). The list is short by design — a
+ * handful of whitelist entries — so the round-trips are fine.
+ */
+export async function fetchUserCards(
+  channel: LarkChannel,
+  openIds: string[],
+): Promise<UserCard[]> {
+  const cards: UserCard[] = [];
+  for (const openId of openIds) {
+    try {
+      const resp = await channel.rawClient.request({
+        method: 'GET',
+        url: `/open-apis/contact/v3/users/${encodeURIComponent(openId)}?user_id_type=open_id`,
+      });
+      const u = (
+        resp as {
+          data?: { user?: { name?: string; avatar?: { avatar_240?: string } } };
+        }
+      )?.data?.user;
+      cards.push({
+        openId,
+        name: u?.name,
+        avatarUrl: u?.avatar?.avatar_240,
+      });
+    } catch (err) {
+      log.warn('lark-info', 'user-card-fetch-failed', {
+        openId: openId.slice(-6),
+        err: err instanceof Error ? err.message : String(err),
+      });
+      cards.push({ openId });
+    }
+  }
+  return cards;
+}
+
+/**
+ * Resolve a list of `chat_id`s to chat cards (name + avatar + member
+ * count). The bot's existing `im:chat:read` scope is enough; no extra
+ * grant required.
+ */
+export async function fetchChatCards(
+  channel: LarkChannel,
+  chatIds: string[],
+): Promise<ChatCard[]> {
+  const cards: ChatCard[] = [];
+  for (const chatId of chatIds) {
+    try {
+      const resp = await channel.rawClient.request({
+        method: 'GET',
+        url: `/open-apis/im/v1/chats/${encodeURIComponent(chatId)}`,
+      });
+      const c = (
+        resp as {
+          data?: { name?: string; avatar?: string; user_count?: string };
+        }
+      )?.data;
+      cards.push({
+        chatId,
+        name: c?.name,
+        avatarUrl: c?.avatar,
+        memberCount: c?.user_count ? Number.parseInt(c.user_count, 10) : undefined,
+      });
+    } catch (err) {
+      log.warn('lark-info', 'chat-card-fetch-failed', {
+        chatId: chatId.slice(-6),
+        err: err instanceof Error ? err.message : String(err),
+      });
+      cards.push({ chatId });
+    }
+  }
+  return cards;
 }
 
 /**

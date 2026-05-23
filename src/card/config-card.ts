@@ -312,6 +312,44 @@ export function configSavedCard(opts: ConfigFormOpts): object {
   };
 }
 
+/**
+ * Card shown when the operator runs `/config` but the bot is missing one
+ * or more required scopes (currently `contact:user.id:readonly` so the
+ * whitelist text input can resolve emails to open_ids). The operator
+ * clicks the button to open Lark's scope-apply page; once granted, they
+ * re-run `/config` and the actual form renders.
+ *
+ * The button uses `behaviors: [{ type: 'open_url', ... }]` per the user
+ * request — no raw URL pasted in the text.
+ */
+export function scopeRequiredCard(opts: {
+  missingScopes: string[];
+  applyUrl: string;
+}): object {
+  const list = opts.missingScopes.map((s) => `\`${s}\``).join('、');
+  return {
+    schema: '2.0',
+    config: { summary: { content: '权限不足，需要去授权' } },
+    body: {
+      elements: [
+        {
+          tag: 'markdown',
+          content:
+            '🔐 **需要授权后才能继续**\n\n' +
+            `Bot 缺少以下权限：${list}\n\n` +
+            '点下方按钮在浏览器里一键申请，授权完成后**重新发 `/config`** 即可。',
+        },
+        {
+          tag: 'button',
+          text: { tag: 'plain_text', content: '🔐 去一键授权' },
+          type: 'primary',
+          behaviors: [{ type: 'open_url', default_url: opts.applyUrl }],
+        },
+      ],
+    },
+  };
+}
+
 export function configCancelledCard(): object {
   return {
     schema: '2.0',

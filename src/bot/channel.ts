@@ -18,7 +18,7 @@ import {
 } from '../card/run-state';
 import { renderText } from '../card/text-renderer';
 import { tryHandleCommand, type Controls } from '../commands';
-import { fetchAppOwnerId, fetchKnownChats } from './lark-info';
+import { fetchAppMeta, fetchKnownChats } from './lark-info';
 import type { AppConfig } from '../config/schema';
 import {
   getAgentStopGraceMs,
@@ -350,11 +350,12 @@ function startAccessRefreshTimer(
 ): { stop: () => void } {
   const REFRESH_INTERVAL_MS = 30 * 60_000;
   const refresh = async (): Promise<void> => {
-    const [owner, chats] = await Promise.all([
-      fetchAppOwnerId(channel, appId),
+    const [meta, chats] = await Promise.all([
+      fetchAppMeta(channel, appId),
       fetchKnownChats(channel),
     ]);
-    controls.botOwnerId = owner;
+    controls.botOwnerId = meta.ownerId;
+    controls.botGrantedScopes = meta.grantedScopes;
     controls.knownChats = chats;
   };
   void refresh();

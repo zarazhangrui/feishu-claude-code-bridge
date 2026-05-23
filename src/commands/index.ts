@@ -9,7 +9,12 @@ import {
   accountFormCard,
   accountSuccessCard,
 } from '../card/account-cards';
-import { configCancelledCard, configFormCard, configSavedCard } from '../card/config-card';
+import {
+  configCancelledCard,
+  configFormCard,
+  configSavedCard,
+  scopeRequiredCard,
+} from '../card/config-card';
 import { forgetManagedCard, sendManagedCard, updateManagedCard } from '../card/managed';
 import { helpCard, resumeCard, statusCard, workspacesCard } from '../card/templates';
 import type { AppConfig, MessageReplyMode, TenantBrand } from '../config/schema';
@@ -40,7 +45,7 @@ import type { SessionStore } from '../session/store';
 import { validateAppCredentials } from '../utils/feishu-auth';
 import type { WorkspaceStore } from '../workspace/store';
 import { createBoundChat, defaultChatName } from '../bot/group';
-import type { KnownChat } from '../bot/lark-info';
+import { type KnownChat, REQUIRED_BOT_SCOPES, scopeApplyUrl } from '../bot/lark-info';
 
 export interface Controls {
   /** Restart the bridge in-process: disconnect WS, kill claude runs, reload
@@ -76,6 +81,16 @@ export interface Controls {
    * this cache (e.g. when the cache was truncated at 500).
    */
   knownChats: KnownChat[];
+  /**
+   * Scopes the bot's app has been granted in the Lark developer console.
+   * Populated by channel.ts on connect (same refresh cadence as owner /
+   * chats). `/config` consults this to decide whether to render the form
+   * directly or prompt the operator to grant a missing scope first.
+   *
+   * An empty set means "not yet probed, or fetch failed" — callers
+   * should treat that as worst-case (assume scopes missing).
+   */
+  botGrantedScopes: Set<string>;
 }
 
 export interface CommandContext {
@@ -910,6 +925,29 @@ async function handleConfig(args: string, ctx: CommandContext): Promise<void> {
 }
 
 async function showConfigForm(ctx: CommandContext): Promise<void> {
+  // Gate the form on required scopes — without `contact:user.id:readonly`
+  // the email→open_id resolution in the form's text input silently drops
+  // emails, which would mislead the operator. We bounce them to the
+  // scope-apply page first, where the button does the heavy lifting.
+  //
+  // An empty `botGrantedScopes` set could mean either "scopes not probed
+  // yet" or "fetch failed" — to avoid a false-positive on a fresh start,
+  // we only show the auth card when the set is *populated* AND a required
+  // scope is genuinely missing.
+  if (ctx.controls.botGrantedScopes.size > 0) {
+    const missing = REQUIRED_BOT_SCOPES.filter(
+      (s) => !ctx.controls.botGrantedScopes.has(s),
+    );
+    if (missing.length > 0) {
+      const card = scopeRequiredCard({
+        missingScopes: missing,
+        applyUrl: scopeApplyUrl(ctx.controls.cfg.accounts.app.id, missing),
+      });
+      if (ctx.fromCardAction) await recallMessage(ctx, ctx.msg.messageId);
+      await sendManagedCard(ctx.channel, ctx.msg.chatId, card);
+      return;
+    }
+  }
   const ms = getRunIdleTimeoutMs(ctx.controls.cfg);
   const access = ctx.controls.cfg.preferences?.access ?? {};
   const card = configFormCard({

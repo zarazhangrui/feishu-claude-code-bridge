@@ -24,43 +24,82 @@ export interface KnownChat {
 }
 
 /**
- * Fetch the current owner open_id of the bot's app. The Lark developer
- * console allows transferring ownership, so we don't persist this — call
- * on startup and refresh periodically (and on reconnect).
+ * Snapshot of the bot's app-level metadata: who owns it and what scopes
+ * it has been granted. Both come from a single `application/v6` call so we
+ * only pay the round-trip once per refresh.
+ */
+export interface AppMeta {
+  ownerId?: string;
+  grantedScopes: Set<string>;
+}
+
+/**
+ * Required bot scopes for access-control features beyond the bare minimum.
+ * Used by `/config` to nudge the operator with a one-click auth button
+ * when something they're trying to do (e.g. resolve emails to open_ids)
+ * is blocked at the API layer.
+ *
+ * Keep this list narrow — only scopes that actually unlock visible UX.
+ */
+export const REQUIRED_BOT_SCOPES = ['contact:user.id:readonly'] as const;
+
+/**
+ * Fetch app owner + granted scope list. The Lark developer console allows
+ * transferring ownership and adding scopes at any time, so we re-query on
+ * the same refresh cadence as the chat list.
  *
  * Endpoint: GET /open-apis/application/v6/applications/{app_id}
- * Scope:    self-query needs no additional scope when called as bot identity.
+ * Scope:    self-query, no additional scope required.
  *
- * Returns undefined when the API errors or the response is shaped
- * unexpectedly. Caller treats `undefined` as "no creator", which combined
- * with empty whitelists fails-secure — the bot stops responding to everyone
- * outside the explicit allowlists.
+ * Returns `{ ownerId: undefined, grantedScopes: new Set() }` on any error
+ * — caller treats `ownerId: undefined` as "no creator" (fail-secure
+ * access control) and an empty `grantedScopes` as "assume worst case".
  */
-export async function fetchAppOwnerId(
-  channel: LarkChannel,
-  appId: string,
-): Promise<string | undefined> {
+export async function fetchAppMeta(channel: LarkChannel, appId: string): Promise<AppMeta> {
   try {
     const resp = await channel.rawClient.request({
       method: 'GET',
       url: `/open-apis/application/v6/applications/${encodeURIComponent(appId)}?lang=zh_cn`,
     });
-    const ownerId = (resp as { data?: { app?: { owner?: { owner_id?: string } } } })
-      ?.data?.app?.owner?.owner_id;
-    if (typeof ownerId === 'string' && ownerId.length > 0) {
-      log.info('lark-info', 'owner-fetched', { ownerId: ownerId.slice(-6) });
-      return ownerId;
+    const app = (
+      resp as {
+        data?: {
+          app?: {
+            owner?: { owner_id?: string };
+            scopes?: Array<{ scope?: string }>;
+          };
+        };
+      }
+    )?.data?.app;
+    const ownerId =
+      typeof app?.owner?.owner_id === 'string' && app.owner.owner_id.length > 0
+        ? app.owner.owner_id
+        : undefined;
+    const grantedScopes = new Set<string>();
+    for (const s of app?.scopes ?? []) {
+      if (typeof s.scope === 'string') grantedScopes.add(s.scope);
     }
-    log.warn('lark-info', 'owner-missing', {
-      hint: 'response did not contain data.app.owner.owner_id',
+    log.info('lark-info', 'app-meta-fetched', {
+      ownerId: ownerId ? ownerId.slice(-6) : undefined,
+      scopeCount: grantedScopes.size,
+      missingRequired: REQUIRED_BOT_SCOPES.filter((s) => !grantedScopes.has(s)),
     });
-    return undefined;
+    return { ownerId, grantedScopes };
   } catch (err) {
-    log.warn('lark-info', 'owner-fetch-failed', {
+    log.warn('lark-info', 'app-meta-fetch-failed', {
       err: err instanceof Error ? err.message : String(err),
     });
-    return undefined;
+    return { ownerId: undefined, grantedScopes: new Set() };
   }
+}
+
+/**
+ * Build the Lark scope-apply page URL for the given app + scopes. The
+ * operator clicks this once; Lark guides them through granting each scope.
+ */
+export function scopeApplyUrl(appId: string, scopes: readonly string[]): string {
+  const scopeParam = encodeURIComponent(scopes.join(','));
+  return `https://open.feishu.cn/page/scope-apply?clientID=${encodeURIComponent(appId)}&scopes=${scopeParam}`;
 }
 
 /**

@@ -124,7 +124,7 @@ export function configFormCard(opts: ConfigFormOpts): object {
   // (removals). The settings form below still uses inputs for messageReply,
   // concurrency, etc — the access section is independent.
   const userRows: object[] = opts.allowedUsers.length === 0
-    ? [emptyHint('（暂无）在群里发 `/invite @某人 user` 添加')]
+    ? [emptyHint('（暂无）在群里发 `/invite user @某人` 添加')]
     : opts.allowedUsers.map((u) =>
         entryRow({
           avatarUrl: u.avatarUrl,
@@ -148,7 +148,7 @@ export function configFormCard(opts: ConfigFormOpts): object {
       );
 
   const adminRows: object[] = opts.admins.length === 0
-    ? [emptyHint('（暂无）在群里发 `/invite @某人 admin` 添加')]
+    ? [emptyHint('（暂无）在群里发 `/invite admin @某人` 添加')]
     : opts.admins.map((u) =>
         entryRow({
           avatarUrl: u.avatarUrl,
@@ -165,9 +165,10 @@ export function configFormCard(opts: ConfigFormOpts): object {
       content:
         '_控制谁能跟 bot 互动。**留空 = 不响应**_\n\n' +
         '**添加方式（在任意群里发命令即可）：**\n' +
-        '• `/invite @某人 user` — 加入允许私聊\n' +
-        '• `/invite @某人 admin` — 加入管理员\n' +
-        '• `/invite group` — 把当前群加入响应群名单',
+        '• `/invite user @某人` — 加入允许私聊\n' +
+        '• `/invite admin @某人` — 加入管理员\n' +
+        '• `/invite group` — 把当前群加入响应群名单\n\n' +
+        '**移除：** 点下方每行右侧的 _移除_ 按钮。',
     },
     { tag: 'hr' },
     { tag: 'markdown', content: '**允许私聊的用户**' },

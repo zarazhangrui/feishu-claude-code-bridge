@@ -924,9 +924,13 @@ async function recallMessage(ctx: CommandContext, messageId: string): Promise<vo
  * /invite manages access whitelists via slash commands. Replaces the in-form
  * picker that didn't reliably search the Lark directory.
  *
- *   /invite @user user     → add the mentioned non-bot users to allowedUsers
- *   /invite @user admin    → add them to admins
+ *   /invite user @user     → add the mentioned non-bot users to allowedUsers
+ *   /invite admin @user    → add them to admins
  *   /invite group          → add the current chat_id to allowedChats
+ *
+ * Token order is flexible (the parser scans for the keyword anywhere),
+ * but the canonical form is keyword-first to match the way humans read
+ * the command aloud ("invite user @周杰").
  *
  * Admin-gated so a stranger who manages to reach the bot can't escalate
  * themselves. Removals are done via the per-row buttons in /config.
@@ -952,8 +956,8 @@ async function handleInvite(args: string, ctx: CommandContext): Promise<void> {
     await reply(
       ctx,
       '用法：\n' +
-        '• `/invite @某人 user` — 加入允许私聊\n' +
-        '• `/invite @某人 admin` — 加入管理员\n' +
+        '• `/invite user @某人` — 加入允许私聊\n' +
+        '• `/invite admin @某人` — 加入管理员\n' +
         '• `/invite group` — 把当前群加入响应群名单',
     );
     return;
@@ -987,7 +991,7 @@ async function handleInvite(args: string, ctx: CommandContext): Promise<void> {
   if (targets.length === 0) {
     await reply(
       ctx,
-      `❌ 没检测到 @ 的用户。请像这样发：\`/invite @某人 ${kind}\`（注意 @ 用户不是 @ bot）。`,
+      `❌ 没检测到 @ 的用户。请像这样发：\`/invite ${kind} @某人\`（注意 @ 用户不是 @ bot）。`,
     );
     return;
   }

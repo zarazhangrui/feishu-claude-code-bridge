@@ -99,7 +99,7 @@ export function configFormCard(opts: ConfigFormOpts): object {
       tag: 'markdown',
       content: '\n**允许私聊的用户**\n_只有这些用户能在私聊里找 bot。_',
     },
-    personPicker('allowed_users_picker', opts.allowedUsers, '搜索并选择用户'),
+    personPicker('allowed_users_picker', opts.allowedUsers, '输入姓名 / 邮箱 / 手机号搜索'),
     {
       tag: 'markdown',
       content: `\n**允许响应的群**\n_bot 只在这些群里响应（含话题群）。_${noChatsHint}`,
@@ -114,9 +114,9 @@ export function configFormCard(opts: ConfigFormOpts): object {
       tag: 'markdown',
       content:
         '\n**管理员**\n' +
-        '_可以跑敏感命令（如 /config、/exit、/reconnect 等）。管理员也自动获得私聊权限。_',
+        '_可以跑敏感命令：`/account` `/config` `/exit` `/reconnect` `/doctor` `/cd` `/ws`。管理员也自动获得私聊权限。_',
     },
-    personPicker('admins_picker', opts.admins, '搜索并选择用户'),
+    personPicker('admins_picker', opts.admins, '输入姓名 / 邮箱 / 手机号搜索'),
   ];
 
   return {

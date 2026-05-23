@@ -18,6 +18,7 @@ import {
 } from '../card/run-state';
 import { renderText } from '../card/text-renderer';
 import { tryHandleCommand, type Controls } from '../commands';
+import { fetchAppOwnerId, fetchKnownChats } from './lark-info';
 import type { AppConfig } from '../config/schema';
 import {
   getAgentStopGraceMs,
@@ -316,14 +317,51 @@ export async function startChannel(deps: StartChannelDeps): Promise<BridgeChanne
     forceReconnect: () => controls.restart(),
   });
 
+  // Populate controls.botOwnerId + controls.knownChats. The owner gates the
+  // "creator bypass" branch of access control; knownChats backs the group
+  // whitelist dropdown in `/config`. Both refresh on a 30-min cadence in
+  // case the owner is transferred or the bot joins/leaves groups.
+  const accessRefreshTimer = startAccessRefreshTimer(channel, cfg.accounts.app.id, controls);
+
   return {
     channel,
     disconnect: async () => {
       keepalive.stop();
+      accessRefreshTimer.stop();
       pending.cancelAll();
       await channel.disconnect();
       await activeRuns.stopAll();
       await Promise.allSettled([sessions.flush(), workspaces.flush()]);
+    },
+  };
+}
+
+/**
+ * Kick off the initial fetch of app owner + bot's chat list, and set up a
+ * 30-minute interval to keep them fresh. The initial fetch is fire-and-forget
+ * so a slow Lark API doesn't gate the bridge from accepting messages — until
+ * it lands, access control sees `botOwnerId: undefined` and the bot stays
+ * in fail-secure mode (only explicit whitelists apply).
+ */
+function startAccessRefreshTimer(
+  channel: LarkChannel,
+  appId: string,
+  controls: Controls,
+): { stop: () => void } {
+  const REFRESH_INTERVAL_MS = 30 * 60_000;
+  const refresh = async (): Promise<void> => {
+    const [owner, chats] = await Promise.all([
+      fetchAppOwnerId(channel, appId),
+      fetchKnownChats(channel),
+    ]);
+    controls.botOwnerId = owner;
+    controls.knownChats = chats;
+  };
+  void refresh();
+  const handle = setInterval(() => void refresh(), REFRESH_INTERVAL_MS);
+  return {
+    stop() {
+      clearInterval(handle);
     },
   };
 }
@@ -370,23 +408,24 @@ async function intakeMessage(deps: IntakeDeps): Promise<void> {
 
   // Access control. Silent drop — replying would reveal the bot to
   // unauthorized users and let them spam the chat with denial messages.
-  // Operator-defined lists; both empty = allow all (back-compat).
-  if (!isUserAllowed(controls.cfg, msg.senderId)) {
+  //
+  // Post-2026-05 default-secure semantics:
+  //   - DM: sender must be creator, admin, or in allowedUsers. Empty = drop.
+  //   - Group: chat must be in allowedChats (creator bypasses). Empty = drop.
+  // See wiki/T7EswTtVsiF1hMkCYNxc51ASnZc and schema.ts AppAccess docstring.
+  const isP2p = msg.chatType === 'p2p';
+  if (!isUserAllowed(controls, msg.senderId, isP2p)) {
     log.info('intake', 'skip-not-allowed-user', {
       scope,
       sender: msg.senderId.slice(-6),
     });
     return;
   }
-  // `allowedChats` is intentionally a group-only gate. p2p chat_ids are
-  // generated per-user-pair and can't be hijacked by an unauthorized
-  // sender, so the user allowlist above is already authoritative for DMs.
-  // Restricting p2p by chat_id would also create a chicken-and-egg lockout
-  // hazard (the operator must know the chat_id before they ever DM the bot).
-  if (msg.chatType !== 'p2p' && !isChatAllowed(controls.cfg, msg.chatId)) {
+  if (!isP2p && !isChatAllowed(controls, msg.chatId, msg.senderId)) {
     log.info('intake', 'skip-not-allowed-chat', {
       scope,
       chatId: msg.chatId.slice(-6),
+      sender: msg.senderId.slice(-6),
     });
     return;
   }

@@ -139,6 +139,10 @@ export async function runStart(opts: StartOptions): Promise<void> {
     configPath,
     cfg,
     processId: entry.id,
+    knownChats: [],
+    // botOwnerId is filled in by channel.ts once the WS handshake + the
+    // application/v6 API call complete. Until then it's `undefined` and
+    // access control behaves fail-secure (no creator bypass).
     async exit() {
       await stop('exit-command');
     },

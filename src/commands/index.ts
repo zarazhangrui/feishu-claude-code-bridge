@@ -40,6 +40,7 @@ import type { SessionStore } from '../session/store';
 import { validateAppCredentials } from '../utils/feishu-auth';
 import type { WorkspaceStore } from '../workspace/store';
 import { createBoundChat, defaultChatName } from '../bot/group';
+import type { KnownChat } from '../bot/lark-info';
 
 export interface Controls {
   /** Restart the bridge in-process: disconnect WS, kill claude runs, reload
@@ -55,6 +56,26 @@ export interface Controls {
   /** This process's short id in the registry. Used by /ps to highlight the
    * receiving process and by /exit to detect self-target. */
   processId: string;
+  /**
+   * Current Lark app owner's open_id. Populated by channel.ts on connect
+   * via the `application/v6/applications` API; refreshed on reconnect and
+   * every 30 minutes. `undefined` when the fetch failed — caller treats
+   * that as "no creator", letting access control fall through to the
+   * explicit whitelists (fail-secure).
+   *
+   * The owner is the only identity that bypasses every whitelist (DM /
+   * group / admin), so this field IS the access-control "creator" concept
+   * — there is no parallel config-file list.
+   */
+  botOwnerId?: string;
+  /**
+   * Chats (groups + topic groups) the bot is currently a member of.
+   * Populated by channel.ts on connect via `im/v1/chats`. Used by
+   * `/config` to render the group whitelist dropdown — operators can
+   * still hand-paste chat_ids via the sibling text input for chats not in
+   * this cache (e.g. when the cache was truncated at 500).
+   */
+  knownChats: KnownChat[];
 }
 
 export interface CommandContext {
@@ -106,9 +127,9 @@ const handlers: Record<string, Handler> = {
 
 /**
  * Commands that can mutate credentials, lifecycle, filesystem reach, or
- * surface sensitive runtime state. Gated on the configured admin allowlist;
- * empty list = no restriction (every allowed user can run them — see
- * `isAdmin` in config/schema).
+ * surface sensitive runtime state. Gated on the admin allowlist + creator:
+ * empty admin list = only the bot creator (current Lark app owner) can
+ * run them. See `isAdmin` in config/schema.
  */
 const ADMIN_COMMANDS = new Set([
   '/account',
@@ -132,7 +153,7 @@ export async function tryHandleCommand(ctx: CommandContext): Promise<boolean> {
   const args = parts.slice(1).join(' ');
   const h = handlers[cmd];
   if (!h) return false;
-  if (isAdminCommand(cmd) && !isAdmin(ctx.controls.cfg, ctx.msg.senderId)) {
+  if (isAdminCommand(cmd) && !isAdmin(ctx.controls, ctx.msg.senderId)) {
     log.info('command', 'admin-deny', {
       cmd,
       sender: ctx.msg.senderId.slice(-6),
@@ -156,7 +177,7 @@ export async function runCommandHandler(
 ): Promise<boolean> {
   const h = handlers[`/${name}`];
   if (!h) return false;
-  if (isAdminCommand(name) && !isAdmin(ctx.controls.cfg, ctx.msg.senderId)) {
+  if (isAdminCommand(name) && !isAdmin(ctx.controls, ctx.msg.senderId)) {
     log.info('command', 'admin-deny', {
       cmd: name,
       sender: ctx.msg.senderId.slice(-6),
@@ -897,9 +918,11 @@ async function showConfigForm(ctx: CommandContext): Promise<void> {
     maxConcurrentRuns: getMaxConcurrentRuns(ctx.controls.cfg),
     runIdleTimeoutMinutes: ms ? Math.round(ms / 60_000) : 0,
     requireMentionInGroup: getRequireMentionInGroup(ctx.controls.cfg),
-    allowedUsers: (access.allowedUsers ?? []).join(', '),
-    allowedChats: (access.allowedChats ?? []).join(', '),
-    admins: (access.admins ?? []).join(', '),
+    allowedUsers: access.allowedUsers ?? [],
+    allowedChats: access.allowedChats ?? [],
+    admins: access.admins ?? [],
+    knownChats: ctx.controls.knownChats,
+    botOwnerId: ctx.controls.botOwnerId,
   });
   if (ctx.fromCardAction) await recallMessage(ctx, ctx.msg.messageId);
   await sendManagedCard(ctx.channel, ctx.msg.chatId, card);
@@ -959,24 +982,58 @@ async function submitConfig(ctx: CommandContext): Promise<void> {
   else if (rawRequireMention === 'no') requireMentionInGroup = false;
   else requireMentionInGroup = getRequireMentionInGroup(ctx.controls.cfg);
 
-  // Parse access lists. Comma-separated; trim each, drop empties, dedupe.
-  // Empty list = unrestricted (back-compat).
-  const parseList = (raw: unknown): string[] => {
-    return [...new Set(
-      String(raw ?? '')
-        .split(',')
-        .map((s) => s.trim())
-        .filter(Boolean),
-    )];
+  // Parse access lists. Each field has two inputs in the form:
+  //   - `<field>_picker`: multi_select_person / multi_select_static. The
+  //     SDK forwards selected IDs either as `string[]` or as `{id|value:
+  //     string}[]` (CardKit hasn't been totally consistent across versions).
+  //     `normalizeIdArray` accepts both.
+  //   - `<field>_text`: a plain comma-separated text input used as a
+  //     fallback (when the picker fails to render, or for IDs not in the
+  //     picker's option set — e.g. chats not in the bot's cached chat list).
+  // We union the two sources and dedupe so either input alone (or both)
+  // works.
+  const normalizeIdArray = (raw: unknown): string[] => {
+    if (Array.isArray(raw)) {
+      return raw
+        .map((it) => {
+          if (typeof it === 'string') return it;
+          if (it && typeof it === 'object') {
+            const o = it as { id?: unknown; value?: unknown };
+            if (typeof o.id === 'string') return o.id;
+            if (typeof o.value === 'string') return o.value;
+          }
+          return '';
+        })
+        .filter(Boolean);
+    }
+    return [];
   };
-  const allowedUsers = parseList(fv.allowed_users);
-  const allowedChats = parseList(fv.allowed_chats);
-  const admins = parseList(fv.admins);
+  const parseList = (raw: unknown): string[] =>
+    String(raw ?? '')
+      .split(',')
+      .map((s) => s.trim())
+      .filter(Boolean);
+  const merge = (pickerKey: string, textKey: string): string[] => [
+    ...new Set([
+      ...normalizeIdArray(fv[pickerKey]),
+      ...parseList(fv[textKey]),
+    ]),
+  ];
+  const allowedUsers = merge('allowed_users_picker', 'allowed_users_text');
+  const allowedChats = merge('allowed_chats_picker', 'allowed_chats_text');
+  const admins = merge('admins_picker', 'admins_text');
 
-  // Self-lockout guard: if the submitter sets a non-empty admins list that
-  // doesn't include themselves, they immediately lose the ability to reopen
-  // /config. Refuse the submit and tell them what's wrong.
-  if (admins.length > 0 && !admins.includes(ctx.msg.senderId)) {
+  // Self-lockout guard: post-redesign, the creator (= Lark app owner) is
+  // always exempt from every whitelist, so the operator can always
+  // recover access by being the app owner. We still warn — but no longer
+  // refuse — when the operator excludes themselves from admins, because
+  // intentionally configuring "only the creator runs admin commands" is
+  // now an expected pattern.
+  if (
+    admins.length > 0 &&
+    !admins.includes(ctx.msg.senderId) &&
+    ctx.controls.botOwnerId !== ctx.msg.senderId
+  ) {
     log.warn('command', 'config-lockout-refused', {
       kind: 'admins',
       sender: ctx.msg.senderId.slice(-6),
@@ -984,24 +1041,21 @@ async function submitConfig(ctx: CommandContext): Promise<void> {
     });
     await reply(
       ctx,
-      `❌ 拒绝提交:你设置了非空的管理员列表,但其中不包含你自己的 open_id (\`${ctx.msg.senderId}\`)。这会立即把你自己锁出 /config。请把自己的 open_id 加进去再提交。`,
+      `❌ 拒绝提交：你设置了非空的管理员列表，但其中不包含你自己的 open_id (\`${ctx.msg.senderId}\`)，且你也不是 bot 创建者。这会立即把你自己锁出 /config。请把自己的 open_id 加进去再提交。`,
     );
     return;
   }
 
-  // Symmetrical guard for chat allowlist: if the submitter restricts chats
-  // but the chat they're currently in isn't on the list, every message
-  // (including the next /config) is silently dropped at intake. Common
-  // mistake: filling in *another* chat's id and forgetting the current one.
-  //
-  // Skipped for p2p: `allowedChats` is group-only (see intakeMessage), so
-  // submitting from a DM never locks the submitter out regardless of the
-  // chat list contents. Using `chatMode` not `msg.chatType` because card
-  // submissions arrive with a synthesized msg that always has chatType='p2p'.
+  // Symmetrical guard for chat allowlist (group only, p2p exempt since
+  // allowedChats doesn't gate DMs). The creator bypass extends here too —
+  // if the submitter is the bot's owner, they can always reach the bot
+  // even from a non-whitelisted group, so a self-lockout is no longer
+  // possible for them.
   if (
     ctx.chatMode !== 'p2p' &&
     allowedChats.length > 0 &&
-    !allowedChats.includes(ctx.msg.chatId)
+    !allowedChats.includes(ctx.msg.chatId) &&
+    ctx.controls.botOwnerId !== ctx.msg.senderId
   ) {
     log.warn('command', 'config-lockout-refused', {
       kind: 'chats',
@@ -1010,7 +1064,7 @@ async function submitConfig(ctx: CommandContext): Promise<void> {
     });
     await reply(
       ctx,
-      `❌ 拒绝提交:你设置了非空的群白名单,但其中不包含当前会话的 chat_id (\`${ctx.msg.chatId}\`)。提交后这个会话的消息会被 intake 静默丢弃,bot 不再响应。要么把当前 chat_id 加进白名单,要么清空"群白名单"留待空(=所有会话都响应)。`,
+      `❌ 拒绝提交：你设置了非空的群白名单，但其中不包含当前会话的 chat_id (\`${ctx.msg.chatId}\`)，且你也不是 bot 创建者。提交后这个会话的消息会被 intake 静默丢弃，bot 不再响应。要么把当前 chat_id 加进白名单，要么清空。`,
     );
     return;
   }
@@ -1045,8 +1099,9 @@ async function submitConfig(ctx: CommandContext): Promise<void> {
       maxConcurrentRuns,
       runIdleTimeoutMinutes,
       requireMentionInGroup,
-      // Empty arrays serialize fine but read identically to omitted ones
-      // (isUserAllowed / isAdmin both treat length===0 as unrestricted).
+      // Empty arrays serialize fine. Under the post-2026-05 semantics
+      // empty list = nobody (DM / group whitelists) or only-creator (admins),
+      // so empty is meaningful, not a stand-in for "unrestricted".
       access: { allowedUsers, allowedChats, admins },
     };
 
@@ -1080,9 +1135,11 @@ async function submitConfig(ctx: CommandContext): Promise<void> {
         maxConcurrentRuns,
         runIdleTimeoutMinutes,
         requireMentionInGroup,
-        allowedUsers: allowedUsers.join(', '),
-        allowedChats: allowedChats.join(', '),
-        admins: admins.join(', '),
+        allowedUsers,
+        allowedChats,
+        admins,
+        knownChats: ctx.controls.knownChats,
+        botOwnerId: ctx.controls.botOwnerId,
       }),
     ).catch((err) =>
       log.warn('command', 'config-save-update-failed', { err: String(err) }),

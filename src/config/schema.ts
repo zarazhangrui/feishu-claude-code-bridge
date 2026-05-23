@@ -69,23 +69,38 @@ export interface SecretsConfig {
 export type MessageReplyMode = 'card' | 'markdown' | 'text';
 
 /**
- * Access control settings. All three lists default to "no restriction" when
- * empty / undefined, so existing deployments are not broken on upgrade.
- * Operators that want a hardened deployment fill these in via
- * `~/.lark-channel/config.json` (no CLI surface yet — by design, since
- * persisting the lists requires the operator to look up open_ids/chat_ids
- * out-of-band anyway).
+ * Access control settings.
+ *
+ * Semantics (post-2026-05 redesign, see wiki/T7EswTtVsiF1hMkCYNxc51ASnZc):
+ *
+ *   - `allowedUsers`: open_id allowlist for DM senders. Empty = nobody can
+ *     DM the bot (except creators / admins, which also pass the DM gate).
+ *     Group senders are NOT gated by this list — group gating is chat-level.
+ *   - `allowedChats`: chat_id allowlist for groups the bot responds in.
+ *     Empty = bot doesn't respond in any group (except when the sender is
+ *     the creator). Doesn't apply to p2p.
+ *   - `admins`: open_id list with admin privileges (sensitive commands
+ *     `/account` `/config` `/exit` `/reconnect` `/doctor` `/cd` `/ws`).
+ *     Empty = only the creator can run admin commands. Non-empty = list +
+ *     creator.
+ *
+ * There is no `creator` field — the creator identity is the Lark app's
+ * current owner, fetched at runtime via `application/v6/applications` and
+ * cached on `Controls.botOwnerId`. See `bot/lark-info.ts`. This lets a
+ * developer-console ownership transfer take effect without a config edit.
+ *
+ * Default-secure: all three lists empty + no resolved owner = the bot
+ * silently drops every incoming message. Operators tighten via `/config`.
  */
 export interface AppAccess {
-  /** open_id whitelist for who can interact with the bot (DM + group @bot).
-   * Empty/undefined = allow everyone. */
+  /** open_id allowlist for DM senders. Empty = no DM (except creator /
+   * admin). Group senders are gated by `allowedChats`, not this list. */
   allowedUsers?: string[];
-  /** chat_id whitelist for chats the bot responds in. Empty/undefined =
-   * respond in all chats it's invited to. */
+  /** chat_id allowlist for groups the bot responds in. Empty = no group
+   * response (except creator). Doesn't apply to p2p. */
   allowedChats?: string[];
-  /** open_id list with admin privileges. Gates sensitive commands
-   * (/account, /config, /exit, /reconnect, /doctor, /cd, /ws). Empty /
-   * undefined = no admin restriction (every allowed user is an admin). */
+  /** open_id list with admin privileges (sensitive commands). Empty = only
+   * the creator can run admin commands. */
   admins?: string[];
 }
 
@@ -241,25 +256,81 @@ export function getAgentStopGraceMs(cfg: AppConfig): number {
   return Math.min(30_000, Math.max(100, Math.floor(raw)));
 }
 
-/** True when `senderId` may interact with the bot. Empty list = allow all. */
-export function isUserAllowed(cfg: AppConfig, senderId: string): boolean {
-  const list = cfg.preferences?.access?.allowedUsers;
-  if (!list || list.length === 0) return true;
-  return list.includes(senderId);
+/**
+ * Minimal shape carrying the inputs every access check needs:
+ *   - `cfg`: the on-disk config (whitelists + admin list)
+ *   - `botOwnerId`: the runtime-resolved Lark app owner (the "creator")
+ *
+ * `Controls` already satisfies this structurally, so callers can pass
+ * `controls` directly without rebuilding a wrapper object.
+ */
+export interface AccessContext {
+  cfg: AppConfig;
+  botOwnerId?: string;
 }
 
-/** True when `chatId` is one the bot will respond in. Empty list = allow all. */
-export function isChatAllowed(cfg: AppConfig, chatId: string): boolean {
-  const list = cfg.preferences?.access?.allowedChats;
-  if (!list || list.length === 0) return true;
+/**
+ * Whether `senderId` is the bot's creator (= current Lark app owner). The
+ * creator unconditionally bypasses every whitelist. When `botOwnerId` is
+ * `undefined` (initial fetch hasn't returned yet, or it failed), this
+ * returns false — fail-secure.
+ */
+export function isCreator(ctx: AccessContext, senderId: string): boolean {
+  return Boolean(ctx.botOwnerId) && ctx.botOwnerId === senderId;
+}
+
+/**
+ * Whether the bot should respond to a message from `senderId`, given the
+ * chat type. Used at intake.
+ *
+ *   - Creator always passes.
+ *   - For p2p (DM): `senderId` must be in `allowedUsers ∪ admins`. Empty
+ *     intersection = silent drop.
+ *   - For groups: returns true unconditionally (chat-level gating happens
+ *     in `isChatAllowed`). Keeps intake's two-step pattern: run this first
+ *     to drop DM strangers, then run `isChatAllowed` for groups.
+ */
+export function isUserAllowed(
+  ctx: AccessContext,
+  senderId: string,
+  isP2p: boolean = true,
+): boolean {
+  if (isCreator(ctx, senderId)) return true;
+  if (!isP2p) return true;
+  const users = ctx.cfg.preferences?.access?.allowedUsers ?? [];
+  const admins = ctx.cfg.preferences?.access?.admins ?? [];
+  return users.includes(senderId) || admins.includes(senderId);
+}
+
+/**
+ * Whether the bot should respond in group `chatId`. Only meaningful for
+ * non-p2p chats — DM gating is in `isUserAllowed`.
+ *
+ *   - If `senderId` is the creator, always allow (bypasses every list).
+ *   - Otherwise: `chatId` must be in `allowedChats`. Empty = silent drop.
+ */
+export function isChatAllowed(
+  ctx: AccessContext,
+  chatId: string,
+  senderId?: string,
+): boolean {
+  if (senderId && isCreator(ctx, senderId)) return true;
+  const list = ctx.cfg.preferences?.access?.allowedChats ?? [];
   return list.includes(chatId);
 }
 
-/** True when `senderId` has admin privileges. Empty list = no admin
- * restriction (every allowed user can run admin commands). */
-export function isAdmin(cfg: AppConfig, senderId: string): boolean {
-  const list = cfg.preferences?.access?.admins;
-  if (!list || list.length === 0) return true;
+/**
+ * Whether `senderId` may run admin-gated commands (`/account`, `/config`,
+ * `/exit`, `/reconnect`, `/doctor`, `/cd`, `/ws`).
+ *
+ *   - Creator always passes.
+ *   - Else: must be in the `admins` list. Empty list = only the creator —
+ *     a tightening from the prior "empty = all allowed users" semantics,
+ *     aligned with the fail-secure direction of the redesign.
+ */
+export function isAdmin(ctx: AccessContext, senderId: string): boolean {
+  if (isCreator(ctx, senderId)) return true;
+  const list = ctx.cfg.preferences?.access?.admins ?? [];
   return list.includes(senderId);
 }
 

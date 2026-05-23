@@ -87,18 +87,68 @@ sender_name: ...
 
 ## 飞书 OAuth 授权（\`lark-cli auth login\`）
 
-授权流程要让 \`lark-cli\` 进程一直活到用户在浏览器里点完为止。bridge 在你的 run 结束之后会回收 claude，**你 spawn 的任何后台 bash 也会跟着死**——所以授权必须用"前台阻塞"的方式跑：
+授权流程要让 \`lark-cli\` 进程一直活到用户在浏览器里点完为止。bridge 在你的 run 结束之后会回收 claude，**你 spawn 的任何后台 bash 也会跟着死**——所以授权必须用"前台阻塞"的方式跑。同时**绝不要把 \`verification_url\` 以纯 URL / 代码块形式发到任何聊天里**——发到群里谁先点谁拿走 token，会绑定到错的身份；发到 DM 也不如按钮卡好用。要发就发成"按钮卡"，群场景下还得先把卡 DM 给发送者。
 
-1. **仅在 p2p 里发起授权**。从 \`bridge_context.chat_type\` 看：
-   - \`chat_type: p2p\` —— 正常按下面流程走。
-   - \`chat_type: group\`（含 topic 群）—— **不要**调 \`lark-cli auth login\`。device flow 把 \`verification_url\` 发到群里，谁先点谁拿走 token——会绑定到错的身份。正确做法是回复用户："授权要在私聊里做，请单独私信我。"
-2. **禁止** 用 \`run_in_background: true\` 调 \`lark-cli auth login\`——它会被你 exit 时一起带走，用户还没点完就丢了。
-3. **推荐两阶段流**（lark-cli 在 \`--no-wait\` 的输出里也会告诉你这套）：
-   - 先跑 \`lark-cli auth login --no-wait --json [--recommend | --domain ... | --scope ...]\`，**这一步秒返回**，stdout 里有 \`verification_url\` 和 \`device_code\`。
-   - 把 \`verification_url\` **原样**用代码块发给用户（不要 Markdown 链接化、不要 URL 编码）。
-   - 紧接着同一轮里跑 \`lark-cli auth login --device-code <code>\`，**这一步前台阻塞**直到用户点完或 10 分钟超时——这是你应该等的地方，不要丢到后台。
-4. 你前台阻塞期间，用户发的新消息 bridge 会自动排队，**不会打断你**；等你 tool_result 一回来，下一批消息再进来。所以放心阻塞。
-5. 如果用户中途想取消，他们会发 \`/stop\`——那时被 kill 是预期行为，不用兜底。
+### 两条统一原则
+
+- 不发原始 \`verification_url\` 文本。要发就发一张 CardKit 2.0 卡，按钮带 \`open_url\` 行为指向 \`verification_url\`。
+- 禁止用 \`run_in_background: true\` 调 \`lark-cli auth login --device-code\`——会被你 exit 时一起带走，用户还没点完就丢了。**必须前台阻塞**。
+
+### 通用 device flow
+
+1. 先跑 \`lark-cli auth login --no-wait --json [--recommend | --domain ... | --scope ...]\`，**这一步秒返回**，stdout JSON 里有 \`verification_url\` 和 \`device_code\`。
+2. 按下方"按 chat_type 分支"把授权卡送给发起者。
+3. 紧接着同一轮里跑 \`lark-cli auth login --device-code <code>\`，**这一步前台阻塞**直到用户点完或 10 分钟超时——这是你应该等的地方，不要丢到后台。
+
+### 按 \`bridge_context.chat_type\` 分支
+
+**\`chat_type: p2p\`（私聊）**
+
+把授权卡发到当前 chat：
+
+\`\`\`bash
+lark-cli im +messages-send --chat-id <bridge_context.chat_id> --msg-type interactive --content '<card-json>'
+\`\`\`
+
+**\`chat_type: group\` / 话题群**
+
+**不要在群里发任何形式的 \`verification_url\`**（连按钮卡也不发到群里）。改成把卡 DM 给发起者，群里只回一句状态：
+
+1. 把卡 DM 给 \`bridge_context.sender_id\`：
+   \`\`\`bash
+   lark-cli im +messages-send --user-id <bridge_context.sender_id> --msg-type interactive --content '<card-json>'
+   \`\`\`
+   \`+messages-send\` 用 \`--user-id\` 时 lark-cli 会自动解 p2p 会话，不用你手动建。
+2. 群里回一句明确状态（纯文本即可）："已私信你授权卡片，请到私聊里点击完成授权。"
+3. 同一轮跑 \`lark-cli auth login --device-code <code>\` 前台阻塞——device flow 的轮询 endpoint 是 lark-cli 自己持有的，与卡发到哪个聊天无关，用户在浏览器里点完后这一轮会正常解锁。
+
+### 授权卡模板
+
+最小可用的 schema 2.0 卡（按钮 \`open_url\` 行为打开 \`verification_url\`）：
+
+\`\`\`json
+{
+  "schema": "2.0",
+  "config": { "summary": { "content": "Lark 授权" } },
+  "body": {
+    "elements": [
+      { "tag": "markdown", "content": "需要授权 \\\`lark-cli\\\` 才能继续。点下方按钮在浏览器里完成授权后回到这里。" },
+      {
+        "tag": "button",
+        "text": { "tag": "plain_text", "content": "🔐 去授权" },
+        "type": "primary",
+        "behaviors": [{ "type": "open_url", "default_url": "VERIFICATION_URL_HERE" }]
+      }
+    ]
+  }
+}
+\`\`\`
+
+把 \`VERIFICATION_URL_HERE\` 替换成 stdout 里拿到的 \`verification_url\` **原值**，不做 URL 编码、不做 Markdown 链接化。**不要**给按钮加 \`__claude_cb\`——这是给用户跳浏览器的 \`open_url\` 行为，不需要回调到你。
+
+### 阻塞期间
+
+你前台阻塞期间，用户发的新消息 bridge 会自动排队，**不会打断你**；等你 tool_result 一回来，下一批消息再进来。放心阻塞。如果用户中途想取消，他们会发 \`/stop\`——那时被 kill 是预期行为，不用兜底。
 `;
 
 export class ClaudeAdapter implements AgentAdapter {

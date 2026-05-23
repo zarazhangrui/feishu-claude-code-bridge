@@ -52,21 +52,21 @@ export async function handleCardAction(deps: CardDispatchDeps): Promise<void> {
   // and can skip the chat allowlist for DMs.
   const { scope, threadId, mode } = await resolveScope(deps);
 
-  // Access control. Operator must be on the same allowlists as message
-  // senders. Silent drop — sending a denial card to an unauthorized user
-  // just confirms the bot exists.
-  if (!isUserAllowed(deps.controls.cfg, operatorId)) {
+  // Access control. Operator must pass the same gates as message senders.
+  // Silent drop — sending a denial card to an unauthorized user just
+  // confirms the bot exists. See intakeMessage in bot/channel.ts and
+  // schema.ts AppAccess docstring for the post-2026-05 semantics.
+  const isP2p = mode === 'p2p';
+  if (!isUserAllowed(deps.controls, operatorId, isP2p)) {
     log.info('cardAction', 'skip-not-allowed-user', {
       operator: operatorId.slice(-6),
     });
     return;
   }
-  // `allowedChats` is group-only — see intakeMessage in bot/channel.ts for
-  // the rationale (p2p chat_ids aren't a meaningful access boundary, the
-  // user check above is authoritative for DMs).
-  if (mode !== 'p2p' && !isChatAllowed(deps.controls.cfg, chatId)) {
+  if (!isP2p && !isChatAllowed(deps.controls, chatId, operatorId)) {
     log.info('cardAction', 'skip-not-allowed-chat', {
       chatId: chatId.slice(-6),
+      operator: operatorId.slice(-6),
     });
     return;
   }

@@ -40,32 +40,26 @@ function collapsedAccessPanel(title: string, elements: object[]): object {
 }
 
 /**
- * Render a single user/chat card with the entry's avatar, label, and a
- * trailing ❌ button that fires the `invite.remove` callback. The button
- * value carries the `kind` (which whitelist) and the target `id`, so the
- * dispatcher can remove from the right list with a single handler.
+ * Render a single whitelist entry: an emoji marker + label (name when
+ * resolved, short id otherwise) + trailing 移除 button. Avatars were tried
+ * in an earlier revision but CardKit 2.0's `img` component takes a Lark
+ * image key (`img_v3_…`), not an external URL — the contact API returns
+ * an avatar URL, so we'd have to round-trip through `im.v1.image.create`
+ * per row just to display the thumbnail. Not worth it for a settings
+ * card; the emoji + name conveys enough.
  */
 function entryRow(opts: {
-  avatarUrl?: string;
+  icon: '👤' | '💬';
   label: string;
   sublabel?: string;
   removeKind: 'user' | 'chat' | 'admin';
   removeId: string;
 }): object {
-  const avatar = opts.avatarUrl
-    ? { tag: 'img', img_key: opts.avatarUrl, alt: { tag: 'plain_text', content: ' ' }, size: '24px 24px', mode: 'fit_horizontal' }
-    : { tag: 'markdown', content: '👤' };
   return {
     tag: 'column_set',
     flex_mode: 'flow',
     horizontal_spacing: '8px',
     columns: [
-      {
-        tag: 'column',
-        width: 'auto',
-        vertical_align: 'center',
-        elements: [avatar],
-      },
       {
         tag: 'column',
         width: 'weighted',
@@ -75,8 +69,8 @@ function entryRow(opts: {
           {
             tag: 'markdown',
             content: opts.sublabel
-              ? `**${opts.label}**\n_${opts.sublabel}_`
-              : `**${opts.label}**`,
+              ? `${opts.icon} **${opts.label}**  _${opts.sublabel}_`
+              : `${opts.icon} **${opts.label}**`,
           },
         ],
       },
@@ -127,7 +121,7 @@ export function configFormCard(opts: ConfigFormOpts): object {
     ? [emptyHint('（暂无）在群里发 `/invite user @某人` 添加')]
     : opts.allowedUsers.map((u) =>
         entryRow({
-          avatarUrl: u.avatarUrl,
+          icon: '👤',
           label: u.name ?? shortId(u.openId),
           sublabel: u.name ? shortId(u.openId) : undefined,
           removeKind: 'user',
@@ -139,7 +133,7 @@ export function configFormCard(opts: ConfigFormOpts): object {
     ? [emptyHint('（暂无）在目标群里发 `/invite group` 添加')]
     : opts.allowedChats.map((c) =>
         entryRow({
-          avatarUrl: c.avatarUrl,
+          icon: '💬',
           label: c.name ?? shortId(c.chatId),
           sublabel: c.memberCount !== undefined ? `${c.memberCount} 人` : shortId(c.chatId),
           removeKind: 'chat',
@@ -151,7 +145,7 @@ export function configFormCard(opts: ConfigFormOpts): object {
     ? [emptyHint('（暂无）在群里发 `/invite admin @某人` 添加')]
     : opts.admins.map((u) =>
         entryRow({
-          avatarUrl: u.avatarUrl,
+          icon: '👤',
           label: u.name ?? shortId(u.openId),
           sublabel: u.name ? shortId(u.openId) : undefined,
           removeKind: 'admin',

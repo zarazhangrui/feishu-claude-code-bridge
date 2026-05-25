@@ -252,8 +252,8 @@ export async function startChannel(deps: StartChannelDeps): Promise<BridgeChanne
     },
     comment: async (evt) => {
       await withTrace({ chatId: 'comment' }, async () => {
-        await handleCommentMention({ channel, evt, agent, sessions, workspaces }).catch((err) =>
-          log.fail('comment', err),
+        await handleCommentMention({ channel, evt, agent, sessions, workspaces, controls }).catch(
+          (err) => log.fail('comment', err),
         );
       }).catch((err) => log.fail('comment', err));
     },

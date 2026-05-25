@@ -2,6 +2,8 @@ import { stat } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import type { LarkChannel, NormalizedMessage } from '@larksuiteoapi/node-sdk';
 import type { AgentAdapter } from '../agent/types';
+import { ClaudeAdapter } from '../agent/claude/adapter';
+import { OpenCodeAdapter } from '../agent/opencode/adapter';
 import type { ActiveRuns } from '../bot/active-runs';
 import type { CronScheduler } from '../cron/scheduler';
 import type { CronStore } from '../cron/store';
@@ -111,6 +113,7 @@ const handlers: Record<string, Handler> = {
   '/exit': handleExit,
   '/doctor': handleDoctor,
   '/reconnect': handleReconnect,
+  '/agent': handleAgent,
 };
 
 /**
@@ -923,6 +926,50 @@ async function handleDoctor(args: string, ctx: CommandContext): Promise<void> {
   } finally {
     ctx.activeRuns.unregister(ctx.scope, run);
   }
+}
+
+async function handleAgent(args: string, ctx: CommandContext): Promise<void> {
+  const name = args.trim().toLowerCase();
+
+  if (!name) {
+    await reply(ctx, `🤖 当前 agent：**${ctx.agent.displayName}**\n可用：\`/agent opencode\`、\`/agent claude\``);
+    return;
+  }
+
+  if (name === 'opencode' || name === 'open') {
+    if (ctx.agent.id === 'opencode') {
+      await reply(ctx, '✅ 已经是 opencode。');
+      return;
+    }
+    const adapter = new OpenCodeAdapter();
+    if (!(await adapter.isAvailable())) {
+      await reply(ctx, '❌ opencode 不可用，请先安装：https://opencode.ai');
+      return;
+    }
+    await adapter.ensureServer();
+    ctx.agent.swap?.(adapter);
+    ctx.sessions.clear(ctx.scope);
+    await reply(ctx, `✅ 已切换到 opencode。\n（当前会话已重置，agent 间 session 不兼容）`);
+    return;
+  }
+
+  if (name === 'claude' || name === 'claude-code') {
+    if (ctx.agent.id === 'claude') {
+      await reply(ctx, '✅ 已经是 claude。');
+      return;
+    }
+    const adapter = new ClaudeAdapter();
+    if (!(await adapter.isAvailable())) {
+      await reply(ctx, '❌ claude CLI 不可用。请先安装：https://docs.anthropic.com/en/docs/claude-code/quickstart');
+      return;
+    }
+    ctx.agent.swap?.(adapter);
+    ctx.sessions.clear(ctx.scope);
+    await reply(ctx, `✅ 已切换到 claude。\n（当前会话已重置，agent 间 session 不兼容）`);
+    return;
+  }
+
+  await reply(ctx, `❌ 未知 agent：\`${name}\`\n可用：\`/agent opencode\`、\`/agent claude\``);
 }
 
 async function handleHelp(_args: string, ctx: CommandContext): Promise<void> {

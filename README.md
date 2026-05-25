@@ -81,6 +81,7 @@ Daemon logs go to `~/.lark-channel/logs/daemon-stdout.log` and `daemon-stderr.lo
 
 | Command | Effect |
 |---|---|---|
+| `/agent [claude\|opencode]` | Show current agent, or switch between Claude Code and OpenCode at runtime |
 | `/cron <description>` | Create a scheduled/recurring task using natural language (e.g. "run tests every morning at 9am") |
 | `/cron list` | List all cron tasks with interactive manage cards |
 | `/cron remove <id>` | Remove a cron task |

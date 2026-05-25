@@ -81,6 +81,7 @@ daemon 的 stdout / stderr 写到 `~/.lark-channel/logs/daemon-stdout.log` 和 `
 
 | 命令 | 作用 |
 |---|---|---|
+| `/agent [claude\|opencode]` | 查看当前智能体，或在 Claude Code 和 OpenCode 之间切换 |
 | `/cron <描述>` | 用自然语言创建定时/循环任务（如"每天早上9点跑测试"） |
 | `/cron list` | 列出所有定时任务，支持交互卡片管理 |
 | `/cron remove <id>` | 删除指定任务 |

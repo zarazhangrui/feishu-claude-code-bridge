@@ -1,3 +1,5 @@
+import * as cronParser from 'cron-parser';
+
 interface ButtonSpec {
   text: string;
   value: Record<string, unknown>;
@@ -157,6 +159,8 @@ export function helpCard(): object {
         '- `/status` — 当前状态',
         '- `/stop` — 结束当前正在跑的任务（也可点卡片底部 ⏹ 终止 按钮）',
         '- `/timeout [N|off|default]` — 当前 session 的探活分钟数,`/config` 改全局默认',
+        '- `/cron <描述>` — 定时任务，自然语言创建（如 `20分钟后检查数据库`）',
+        '  `/cron list|remove <id>|toggle <id>` — 管理定时任务',
         '- `/ps` — 列出本机所有 bot,标识当前正在回复的那个',
         '- `/exit <id|#>` — 关掉指定 bot(用 `/ps` 看 id/序号)',
         '- `/reconnect` — 强制重连 WebSocket(网络抖动后 bot 没反应时用)',
@@ -174,6 +178,117 @@ export function helpCard(): object {
       { text: '🆕 新会话', value: { cmd: 'new' } },
     ]),
   ]);
+}
+
+export interface CronJobEntry {
+  id: string;
+  label: string;
+  schedule: string;
+  runAt?: number;
+  enabled: boolean;
+  lastRunAt?: number;
+  lastRunStatus?: 'success' | 'error';
+  prompt: string;
+}
+
+const NEXT_RUN_LIMIT = 5;
+
+function nextRunTime(schedule: string): string {
+  try {
+    const interval = cronParser.parseExpression(schedule);
+    const next = interval.next();
+    const d = next.toDate();
+    const now = Date.now();
+    const diff = d.getTime() - now;
+    if (diff < 0) return '已过期';
+    if (diff < 60_000) return '即将执行';
+    if (diff < 3_600_000) return `${Math.round(diff / 60_000)} 分钟后`;
+    if (diff < 86_400_000) return `${Math.round(diff / 3_600_000)} 小时后`;
+    return `${Math.round(diff / 86_400_000)} 天后`;
+  } catch {
+    return '未知';
+  }
+}
+
+function formatTime(ts: number): string {
+  const d = new Date(ts);
+  const h = String(d.getHours()).padStart(2, '0');
+  const m = String(d.getMinutes()).padStart(2, '0');
+  return `${d.getMonth() + 1}/${d.getDate()} ${h}:${m}`;
+}
+
+export function cronListCard(jobs: CronJobEntry[]): object {
+  const elements: object[] = [];
+  if (jobs.length === 0) {
+    elements.push(divMd('暂无定时任务。'));
+    elements.push(divMd('💡 发送 `/cron <描述>` 创建，例如：\n`/cron 每天早上9点检查数据库`'));
+  } else {
+    for (const job of jobs) {
+      const status = job.enabled ? '🟢' : '⚪';
+      const lastRun = job.lastRunAt
+        ? `上次执行: ${formatTime(job.lastRunAt)} ${job.lastRunStatus === 'success' ? '✓' : '✗'}`
+        : '尚未执行';
+
+      // One-time task
+      if (job.runAt) {
+        const diff = job.runAt - Date.now();
+        const countdown = diff > 0 ? delayText(diff) : '即将执行';
+        const timeStr = formatTime(job.runAt);
+        elements.push(
+          divMd(
+            `${status} **${job.label}**  \n` +
+            `⏳ 一次性 · ${timeStr}（${countdown}）\n` +
+            `${lastRun}`,
+          ),
+        );
+        elements.push(
+          actions([
+            {
+              text: '🗑 删除',
+              value: { cmd: 'cron.remove', arg: job.id },
+              style: 'danger',
+            },
+          ]),
+        );
+        elements.push(HR);
+        continue;
+      }
+
+      // Recurring task
+      const nextRun = job.enabled ? `下次执行: ${nextRunTime(job.schedule)}` : '已暂停';
+      elements.push(
+        divMd(
+          `${status} **${job.label}**  \n` +
+          `\`${job.schedule}\`  ${nextRun}  \n` +
+          `${lastRun}`,
+        ),
+      );
+      elements.push(
+        actions([
+          {
+            text: job.enabled ? '⏸ 暂停' : '▶️ 恢复',
+            value: { cmd: 'cron.toggle', arg: job.id },
+          },
+          {
+            text: '🗑 删除',
+            value: { cmd: 'cron.remove', arg: job.id },
+            style: 'danger',
+          },
+        ]),
+      );
+      elements.push(HR);
+    }
+  }
+  return shell('⏰ 定时任务', elements);
+}
+
+function delayText(ms: number): string {
+  const min = Math.round(ms / 60_000);
+  if (min <= 0) return '即将执行';
+  if (min < 60) return `${min} 分钟后`;
+  const hour = Math.floor(min / 60);
+  const remain = min % 60;
+  return remain > 0 ? `${hour} 小时 ${remain} 分钟后` : `${hour} 小时后`;
 }
 
 function escapeMd(s: string): string {

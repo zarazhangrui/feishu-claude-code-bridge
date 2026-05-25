@@ -80,7 +80,11 @@ Daemon logs go to `~/.lark-channel/logs/daemon-stdout.log` and `daemon-stderr.lo
 ### Slash commands inside Feishu / Lark
 
 | Command | Effect |
-|---|---|
+|---|---|---|
+| `/cron <description>` | Create a scheduled/recurring task using natural language (e.g. "run tests every morning at 9am") |
+| `/cron list` | List all cron tasks with interactive manage cards |
+| `/cron remove <id>` | Remove a cron task |
+| `/cron toggle <id>` | Enable / disable a cron task |
 | `/new`, `/reset` | Clear the current chat's session |
 | `/cd <path>` | Switch working directory (resets session) |
 | `/ws list` | List named workspaces (card + buttons) |
@@ -107,6 +111,7 @@ Daemon logs go to `~/.lark-channel/logs/daemon-stdout.log` and `daemon-stderr.lo
 | `~/.lark-channel/config.json` | App credentials (App ID / Secret), mode 600 |
 | `~/.lark-channel/sessions.json` | Claude session id + cwd per chat / topic (+ optional `/timeout` override) |
 | `~/.lark-channel/workspaces.json` | Named-workspace map |
+| `~/.lark-channel/cron-jobs.json` | Cron jobs persistent storage |
 | `~/.lark-channel/processes.json` | Process registry for live `start` instances (used by `ps`/`stop`); dead PIDs are auto-pruned |
 | `~/.lark-channel/media/<chatId>/` | Downloaded images / files, cleaned up after 24h |
 | `~/.lark-channel/logs/YYYY-MM-DD.log` | Structured run logs (JSONL), rotated daily; older than 7 days are pruned at startup (`LARK_CHANNEL_LOG_DAYS` env var overrides). `/doctor` reads these. |

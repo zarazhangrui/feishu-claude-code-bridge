@@ -19,6 +19,7 @@ import {
 import { renderText } from '../card/text-renderer';
 import { tryHandleCommand, type Controls } from '../commands';
 import type { AppConfig } from '../config/schema';
+import { CronScheduler } from '../cron/scheduler';
 import {
   getAgentStopGraceMs,
   getMaxConcurrentRuns,
@@ -316,14 +317,27 @@ export async function startChannel(deps: StartChannelDeps): Promise<BridgeChanne
     forceReconnect: () => controls.restart(),
   });
 
+  // Start cron scheduler if a cron store is configured
+  if (controls.cronStore) {
+    const scheduler = new CronScheduler({
+      channel,
+      agent,
+      store: controls.cronStore,
+      getStopGraceMs: () => getAgentStopGraceMs(controls.cfg),
+    });
+    controls.cronScheduler = scheduler;
+    scheduler.start();
+  }
+
   return {
     channel,
     disconnect: async () => {
+      controls.cronScheduler?.stop();
       keepalive.stop();
       pending.cancelAll();
       await channel.disconnect();
       await activeRuns.stopAll();
-      await Promise.allSettled([sessions.flush(), workspaces.flush()]);
+      await Promise.allSettled([sessions.flush(), workspaces.flush(), controls.cronStore?.flush()]);
     },
   };
 }

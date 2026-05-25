@@ -28,6 +28,7 @@ import {
 } from '../../runtime/registry';
 import { SessionStore } from '../../session/store';
 import { WorkspaceStore } from '../../workspace/store';
+import { CronStore } from '../../cron/store';
 
 // Prefer IPv4 — Node 20+ defaults to "verbatim" which respects whatever
 // the resolver returns first; in IPv6-broken networks (WSL2, certain VPNs,
@@ -87,6 +88,8 @@ export async function runStart(opts: StartOptions): Promise<void> {
   await sessions.load();
   const workspaces = new WorkspaceStore();
   await workspaces.load();
+  const cronStore = new CronStore();
+  await cronStore.load();
 
   await gcMediaCache(MEDIA_GC_MAX_AGE_MS);
   await gcOldLogs();
@@ -139,6 +142,7 @@ export async function runStart(opts: StartOptions): Promise<void> {
     configPath,
     cfg,
     processId: entry.id,
+    cronStore,
     async exit() {
       await stop('exit-command');
     },

@@ -67,7 +67,7 @@ function detectProxyEnv(): Record<string, string> {
     }
   }
 
-  if (env.https_proxy && !process.env.NODE_TLS_REJECT_UNAUTHORIZED) {
+  if (env.https_proxy) {
     env.NODE_TLS_REJECT_UNAUTHORIZED = '0';
   }
 

@@ -4,6 +4,7 @@ import type { LarkChannel, NormalizedMessage } from '@larksuiteoapi/node-sdk';
 import type { AgentAdapter } from '../agent/types';
 import { ClaudeAdapter } from '../agent/claude/adapter';
 import { OpenCodeAdapter } from '../agent/opencode/adapter';
+import { SwappableAgent } from '../agent/swappable';
 import type { ActiveRuns } from '../bot/active-runs';
 import type { CronScheduler } from '../cron/scheduler';
 import type { CronStore } from '../cron/store';
@@ -962,6 +963,12 @@ async function handleAgent(args: string, ctx: CommandContext): Promise<void> {
     if (!(await adapter.isAvailable())) {
       await reply(ctx, '❌ claude CLI 不可用。请先安装：https://docs.anthropic.com/en/docs/claude-code/quickstart');
       return;
+    }
+    // Kill opencode serve process before switching away
+    const swappable = ctx.agent as SwappableAgent;
+    const current = swappable.current;
+    if (current instanceof OpenCodeAdapter) {
+      await current.killServer();
     }
     ctx.agent.swap?.(adapter);
     ctx.sessions.clear(ctx.scope);

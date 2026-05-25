@@ -62,7 +62,9 @@ export async function parseCronDescription(
   });
 
   let text = '';
+  let timedOut = false;
   const timer = setTimeout(() => {
+    timedOut = true;
     run.stop().catch(() => {});
   }, PARSE_TIMEOUT_MS);
 
@@ -80,8 +82,10 @@ export async function parseCronDescription(
     }
     clearTimeout(timer);
 
-    await run.waitForExit(2000);
-    await run.stop();
+    if (!timedOut) {
+      await run.waitForExit(2000);
+      await run.stop();
+    }
 
     const jsonMatch = text.match(/\{[\s\S]*\}/);
     if (!jsonMatch) {

@@ -1,5 +1,5 @@
 import { createReadStream } from 'node:fs';
-import { readdir, stat } from 'node:fs/promises';
+import { readdir, rm, stat } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { createInterface } from 'node:readline';
@@ -17,6 +17,15 @@ function encodeCwd(cwd: string): string {
 
 function claudeProjectDir(cwd: string): string {
   return join(homedir(), '.claude', 'projects', encodeCwd(cwd));
+}
+
+/**
+ * Delete the JSONL file for `sessionId` under `cwd`. Silently ignores
+ * ENOENT (file already gone). Throws on other I/O errors.
+ */
+export async function deleteSession(cwd: string, sessionId: string): Promise<void> {
+  const path = join(claudeProjectDir(cwd), `${sessionId}.jsonl`);
+  await rm(path, { force: true });
 }
 
 /** Return the most recent `limit` jsonl sessions for the given cwd, newest first. */

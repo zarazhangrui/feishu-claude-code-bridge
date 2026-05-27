@@ -40,7 +40,7 @@ import type { SessionStore } from '../session/store';
 import { validateAppCredentials } from '../utils/feishu-auth';
 import type { WorkspaceStore } from '../workspace/store';
 import { createBoundChat, defaultChatName } from '../bot/group';
-import { fetchAppMeta, type KnownChat } from '../bot/lark-info';
+import { fetchAppMeta, fetchKnownChats, type KnownChat } from '../bot/lark-info';
 
 export interface Controls {
   /** Restart the bridge in-process: disconnect WS, kill claude runs, reload
@@ -1134,19 +1134,27 @@ async function handleConfig(args: string, ctx: CommandContext): Promise<void> {
 }
 
 async function showConfigForm(ctx: CommandContext): Promise<void> {
-  // Refresh the cached owner from the application API. Cheap (one round
-  // trip), and keeps the creator-bypass current if ownership was
-  // transferred. No scope gate anymore: the access section renders the
-  // whitelists as markdown `<at>` mentions, which the Lark client resolves
-  // to names/avatars client-side, so the bridge needs no contact scope to
-  // display them.
-  try {
-    const meta = await fetchAppMeta(ctx.channel, ctx.controls.cfg.accounts.app.id);
-    if (meta.ownerId) ctx.controls.botOwnerId = meta.ownerId;
-    if (meta.grantedScopes.size > 0) ctx.controls.botGrantedScopes = meta.grantedScopes;
-  } catch {
-    // Refresh failed — fall through with cached values; not fatal.
-  }
+  // Refresh the cached owner AND chat list on demand. The startup /
+  // 30-min refresh timer occasionally fails fetchKnownChats with a
+  // transient SDK token error ("Cannot destructure tenant_access_token"),
+  // leaving controls.knownChats empty — which makes the group whitelist
+  // render as "(未知群)" because the names can't be resolved. /config is a
+  // stable, user-triggered moment (these fetches succeed reliably here),
+  // so re-pull both and refresh the cache. Each fetch is independently
+  // guarded so one failing doesn't blank the other.
+  await Promise.all([
+    fetchAppMeta(ctx.channel, ctx.controls.cfg.accounts.app.id)
+      .then((meta) => {
+        if (meta.ownerId) ctx.controls.botOwnerId = meta.ownerId;
+        if (meta.grantedScopes.size > 0) ctx.controls.botGrantedScopes = meta.grantedScopes;
+      })
+      .catch(() => {}),
+    fetchKnownChats(ctx.channel)
+      .then((chats) => {
+        if (chats.length > 0) ctx.controls.knownChats = chats;
+      })
+      .catch(() => {}),
+  ]);
 
   const ms = getRunIdleTimeoutMs(ctx.controls.cfg);
   const access = ctx.controls.cfg.preferences?.access ?? {};

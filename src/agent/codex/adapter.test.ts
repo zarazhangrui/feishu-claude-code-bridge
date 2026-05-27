@@ -56,4 +56,15 @@ describe('buildCodexArgs', () => {
     const i = args.indexOf('-m');
     expect(args[i + 1]).toBe('gpt-5.1-codex');
   });
+
+  it('passes reasoning effort via -c when configured', () => {
+    const args = buildCodexArgs({ prompt: 'x' }, { reasoningEffort: 'medium' });
+    const i = args.indexOf('-c');
+    expect(i).toBeGreaterThan(-1);
+    expect(args[i + 1]).toBe('model_reasoning_effort="medium"');
+  });
+
+  it('omits the reasoning-effort flag when not configured', () => {
+    expect(buildCodexArgs({ prompt: 'x' })).not.toContain('-c');
+  });
 });

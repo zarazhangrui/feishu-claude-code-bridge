@@ -3,12 +3,20 @@ import { spawn } from 'node:child_process';
 import { createInterface } from 'node:readline';
 import type { Readable } from 'node:stream';
 import { log } from '../../core/logger';
+import type { CodexReasoningEffort } from '../../config/schema';
 import type { AgentAdapter, AgentEvent, AgentRun, AgentRunOptions } from '../types';
 import { CODEX_BRIDGE_PROMPT } from './bridge-prompt';
 import { translateEvent } from './stream-json';
 
 export interface CodexAdapterOptions {
   binary?: string;
+  /** Reasoning effort passed as `-c model_reasoning_effort=<value>`. */
+  reasoningEffort?: CodexReasoningEffort;
+}
+
+/** Per-run Codex config that isn't part of the generic AgentRunOptions. */
+interface CodexRunConfig {
+  reasoningEffort?: CodexReasoningEffort;
 }
 
 type CodexChild = ChildProcessByStdio<null, Readable, Readable>;
@@ -38,12 +46,15 @@ function sandboxArgs(mode: AgentRunOptions['permissionMode']): string[] {
  * Resume:      `exec resume <id> [flags] "<user prompt>"` — no re-injection,
  *              the persisted thread already carries the conventions.
  */
-export function buildCodexArgs(opts: AgentRunOptions): string[] {
+export function buildCodexArgs(opts: AgentRunOptions, cfg: CodexRunConfig = {}): string[] {
   const args = opts.sessionId ? ['exec', 'resume', opts.sessionId] : ['exec'];
   args.push('--json', '--skip-git-repo-check');
   if (opts.cwd) args.push('-C', opts.cwd);
   args.push(...sandboxArgs(opts.permissionMode));
   if (opts.model) args.push('-m', opts.model);
+  if (cfg.reasoningEffort) {
+    args.push('-c', `model_reasoning_effort="${cfg.reasoningEffort}"`);
+  }
 
   const prompt = opts.sessionId ? opts.prompt : `${CODEX_BRIDGE_PROMPT}${opts.prompt}`;
   args.push(prompt);
@@ -53,11 +64,13 @@ export function buildCodexArgs(opts: AgentRunOptions): string[] {
 export class CodexAdapter implements AgentAdapter {
   readonly id = 'codex';
   readonly displayName = 'Codex';
+  readonly reasoningEffort?: CodexReasoningEffort;
 
   private readonly binary: string;
 
   constructor(opts: CodexAdapterOptions = {}) {
     this.binary = opts.binary ?? 'codex';
+    this.reasoningEffort = opts.reasoningEffort;
   }
 
   async isAvailable(): Promise<boolean> {
@@ -69,7 +82,7 @@ export class CodexAdapter implements AgentAdapter {
   }
 
   run(opts: AgentRunOptions): AgentRun {
-    const args = buildCodexArgs(opts);
+    const args = buildCodexArgs(opts, { reasoningEffort: this.reasoningEffort });
 
     const child = spawn(this.binary, args, {
       cwd: opts.cwd,

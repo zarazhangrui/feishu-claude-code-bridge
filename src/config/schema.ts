@@ -3,6 +3,9 @@ export type TenantBrand = 'feishu' | 'lark';
 /** Which local coding-agent CLI the bridge drives. Default 'claude'. */
 export type AgentKind = 'claude' | 'codex';
 
+/** Codex reasoning-effort levels, passed as `model_reasoning_effort`. */
+export type CodexReasoningEffort = 'minimal' | 'low' | 'medium' | 'high';
+
 /**
  * SecretRef points at a secret stored outside this file — keeps secrets out
  * of `config.json` so backups / accidental git commits / log dumps don't
@@ -100,6 +103,12 @@ export interface AppPreferences {
    * yet — by design, since it's a deploy-time choice.
    */
   agent?: AgentKind;
+  /**
+   * Reasoning effort for the Codex agent (`agent: 'codex'`). When set, the
+   * bridge passes `-c model_reasoning_effort=<value>` to `codex exec`. Unset
+   * = let Codex use its own default. Ignored when agent is 'claude'.
+   */
+  codexReasoningEffort?: CodexReasoningEffort;
   /** Reply rendering mode for IM (group/p2p) messages. Default 'card'. */
   messageReply?: MessageReplyMode;
   /**
@@ -216,6 +225,17 @@ export function getMessageReplyMode(cfg: AppConfig): MessageReplyMode {
  * from sites that only hold a possibly-incomplete config. */
 export function getAgentKind(cfg: Pick<AppConfig, 'preferences'>): AgentKind {
   return cfg.preferences?.agent === 'codex' ? 'codex' : 'claude';
+}
+
+/** Resolve the Codex reasoning effort. Unknown / unset → undefined (Codex
+ * picks its own default). Accepts the minimal shape, like getAgentKind. */
+export function getCodexReasoningEffort(
+  cfg: Pick<AppConfig, 'preferences'>,
+): CodexReasoningEffort | undefined {
+  const raw = cfg.preferences?.codexReasoningEffort;
+  return raw === 'minimal' || raw === 'low' || raw === 'medium' || raw === 'high'
+    ? raw
+    : undefined;
 }
 
 /** Resolve the show-tool-calls preference with default fallback. */

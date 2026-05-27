@@ -78,11 +78,13 @@ export type MessageReplyMode = 'card' | 'markdown' | 'text';
  *     Group senders are NOT gated by this list — group gating is chat-level.
  *   - `allowedChats`: chat_id allowlist for groups the bot responds in.
  *     Empty = bot doesn't respond in any group (except when the sender is
- *     the creator). Doesn't apply to p2p.
+ *     the creator or an admin, who bypass the chat whitelist). Doesn't
+ *     apply to p2p.
  *   - `admins`: open_id list with admin privileges (sensitive commands
  *     `/account` `/config` `/exit` `/reconnect` `/doctor` `/cd` `/ws`).
  *     Empty = only the creator can run admin commands. Non-empty = list +
- *     creator.
+ *     creator. Admins also bypass the group chat whitelist, so the bot
+ *     responds to them in any group regardless of `allowedChats`.
  *
  * There is no `creator` field — the creator identity is the Lark app's
  * current owner, fetched at runtime via `application/v6/applications` and
@@ -97,7 +99,8 @@ export interface AppAccess {
    * admin). Group senders are gated by `allowedChats`, not this list. */
   allowedUsers?: string[];
   /** chat_id allowlist for groups the bot responds in. Empty = no group
-   * response (except creator). Doesn't apply to p2p. */
+   * response (except creator / admins, who bypass it). Doesn't apply to
+   * p2p. */
   allowedChats?: string[];
   /** open_id list with admin privileges (sensitive commands). Empty = only
    * the creator can run admin commands. */
@@ -306,7 +309,9 @@ export function isUserAllowed(
  * Whether the bot should respond in group `chatId`. Only meaningful for
  * non-p2p chats — DM gating is in `isUserAllowed`.
  *
- *   - If `senderId` is the creator, always allow (bypasses every list).
+ *   - If `senderId` is the creator or an admin, always allow — they bypass
+ *     the chat whitelist so they can drive the bot in any group (e.g. to
+ *     run `/invite group` and add the group from inside it).
  *   - Otherwise: `chatId` must be in `allowedChats`. Empty = silent drop.
  */
 export function isChatAllowed(
@@ -314,7 +319,9 @@ export function isChatAllowed(
   chatId: string,
   senderId?: string,
 ): boolean {
-  if (senderId && isCreator(ctx, senderId)) return true;
+  // isAdmin already returns true for the creator, so this one check covers
+  // both bypass identities.
+  if (senderId && isAdmin(ctx, senderId)) return true;
   const list = ctx.cfg.preferences?.access?.allowedChats ?? [];
   return list.includes(chatId);
 }

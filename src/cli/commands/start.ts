@@ -140,11 +140,9 @@ export async function runStart(opts: StartOptions): Promise<void> {
     cfg,
     processId: entry.id,
     knownChats: [],
-    botGrantedScopes: new Set(),
-    // botOwnerId + botGrantedScopes are filled in by channel.ts once the
-    // WS handshake + the application/v6 API call complete. Until then they
-    // stay at defaults and access control behaves fail-secure (no creator
-    // bypass; /config will offer the scope-apply button if needed).
+    // botOwnerId is filled in by channel.ts once the WS handshake + the
+    // application/v6 API call complete. Until then it stays undefined and
+    // access control behaves fail-secure (no creator bypass).
     async exit() {
       await stop('exit-command');
     },

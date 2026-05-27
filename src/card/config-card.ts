@@ -89,8 +89,8 @@ export function configFormCard(opts: ConfigFormOpts): object {
       content:
         `**允许响应的群**（共 ${opts.allowedChats.length} 个）\n` +
         `${chatList(opts.allowedChats, opts.knownChats)}\n\n` +
-        '_加 / 删（在目标群里发）：_ `/invite group`　`/remove group`\n' +
-        '_一键加全部 bot 所在的群：_ `/invite all group`',
+        '_一键加全部 bot 所在的群：_ `/invite all group`\n' +
+        '_加 / 删（在目标群里发）：_ `/invite group`　`/remove group`',
     },
     { tag: 'hr' },
     {

@@ -40,7 +40,7 @@ import type { SessionStore } from '../session/store';
 import { validateAppCredentials } from '../utils/feishu-auth';
 import type { WorkspaceStore } from '../workspace/store';
 import { createBoundChat, defaultChatName } from '../bot/group';
-import { fetchAppMeta, fetchKnownChats, type KnownChat } from '../bot/lark-info';
+import { fetchAppOwnerId, fetchKnownChats, type KnownChat } from '../bot/lark-info';
 
 export interface Controls {
   /** Restart the bridge in-process: disconnect WS, kill claude runs, reload
@@ -76,16 +76,6 @@ export interface Controls {
    * this cache (e.g. when the cache was truncated at 500).
    */
   knownChats: KnownChat[];
-  /**
-   * Scopes the bot's app has been granted in the Lark developer console.
-   * Populated by channel.ts on connect (same refresh cadence as owner /
-   * chats). `/config` consults this to decide whether to render the form
-   * directly or prompt the operator to grant a missing scope first.
-   *
-   * An empty set means "not yet probed, or fetch failed" — callers
-   * should treat that as worst-case (assume scopes missing).
-   */
-  botGrantedScopes: Set<string>;
 }
 
 export interface CommandContext {
@@ -1143,10 +1133,9 @@ async function showConfigForm(ctx: CommandContext): Promise<void> {
   // so re-pull both and refresh the cache. Each fetch is independently
   // guarded so one failing doesn't blank the other.
   await Promise.all([
-    fetchAppMeta(ctx.channel, ctx.controls.cfg.accounts.app.id)
-      .then((meta) => {
-        if (meta.ownerId) ctx.controls.botOwnerId = meta.ownerId;
-        if (meta.grantedScopes.size > 0) ctx.controls.botGrantedScopes = meta.grantedScopes;
+    fetchAppOwnerId(ctx.channel, ctx.controls.cfg.accounts.app.id)
+      .then((ownerId) => {
+        if (ownerId) ctx.controls.botOwnerId = ownerId;
       })
       .catch(() => {}),
     fetchKnownChats(ctx.channel)

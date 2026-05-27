@@ -24,42 +24,21 @@ export interface KnownChat {
 }
 
 /**
- * Snapshot of the bot's app-level metadata: who owns it and what scopes
- * it has been granted. Both come from a single `application/v6` call so we
- * only pay the round-trip once per refresh.
- */
-export interface AppMeta {
-  ownerId?: string;
-  grantedScopes: Set<string>;
-}
-
-/**
- * Required bot scopes for access-control features beyond the bare minimum.
- * Used by `/config` to nudge the operator with a one-click auth button
- * when something they're trying to do (e.g. resolve emails to open_ids)
- * is blocked at the API layer.
- *
- * Keep this list narrow — only scopes that actually unlock visible UX.
- */
-export const REQUIRED_BOT_SCOPES = [
-  // Resolve sender / open_id → name and avatar so the /config access section
-  // can render whitelist members as proper avatar cards instead of bare IDs.
-  'contact:user.base:readonly',
-] as const;
-
-/**
- * Fetch app owner + granted scope list. The Lark developer console allows
- * transferring ownership and adding scopes at any time, so we re-query on
- * the same refresh cadence as the chat list.
+ * Fetch the app's current owner open_id (= the bot "creator"). The Lark
+ * developer console allows transferring ownership at any time, so we
+ * re-query on the same refresh cadence as the chat list.
  *
  * Endpoint: GET /open-apis/application/v6/applications/{app_id}
  * Scope:    self-query, no additional scope required.
  *
- * Returns `{ ownerId: undefined, grantedScopes: new Set() }` on any error
- * — caller treats `ownerId: undefined` as "no creator" (fail-secure
- * access control) and an empty `grantedScopes` as "assume worst case".
+ * Returns `undefined` on any error or when no owner is set — the caller
+ * treats that as "no creator", which collapses access control into
+ * fail-secure mode (only the explicit whitelists count).
  */
-export async function fetchAppMeta(channel: LarkChannel, appId: string): Promise<AppMeta> {
+export async function fetchAppOwnerId(
+  channel: LarkChannel,
+  appId: string,
+): Promise<string | undefined> {
   try {
     const resp = await channel.rawClient.request({
       method: 'GET',
@@ -70,7 +49,6 @@ export async function fetchAppMeta(channel: LarkChannel, appId: string): Promise
         data?: {
           app?: {
             owner?: { owner_id?: string };
-            scopes?: Array<{ scope?: string }>;
           };
         };
       }
@@ -79,31 +57,16 @@ export async function fetchAppMeta(channel: LarkChannel, appId: string): Promise
       typeof app?.owner?.owner_id === 'string' && app.owner.owner_id.length > 0
         ? app.owner.owner_id
         : undefined;
-    const grantedScopes = new Set<string>();
-    for (const s of app?.scopes ?? []) {
-      if (typeof s.scope === 'string') grantedScopes.add(s.scope);
-    }
-    log.info('lark-info', 'app-meta-fetched', {
+    log.info('lark-info', 'app-owner-fetched', {
       ownerId: ownerId ? ownerId.slice(-6) : undefined,
-      scopeCount: grantedScopes.size,
-      missingRequired: REQUIRED_BOT_SCOPES.filter((s) => !grantedScopes.has(s)),
     });
-    return { ownerId, grantedScopes };
+    return ownerId;
   } catch (err) {
-    log.warn('lark-info', 'app-meta-fetch-failed', {
+    log.warn('lark-info', 'app-owner-fetch-failed', {
       err: err instanceof Error ? err.message : String(err),
     });
-    return { ownerId: undefined, grantedScopes: new Set() };
+    return undefined;
   }
-}
-
-/**
- * Build the Lark scope-apply page URL for the given app + scopes. The
- * operator clicks this once; Lark guides them through granting each scope.
- */
-export function scopeApplyUrl(appId: string, scopes: readonly string[]): string {
-  const scopeParam = encodeURIComponent(scopes.join(','));
-  return `https://open.feishu.cn/page/scope-apply?clientID=${encodeURIComponent(appId)}&scopes=${scopeParam}`;
 }
 
 /**

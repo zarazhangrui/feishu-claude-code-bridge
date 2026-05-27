@@ -1,7 +1,6 @@
 import { registerApp } from '@larksuiteoapi/node-sdk';
 import qrcode from 'qrcode-terminal';
 import type { AppConfig, TenantBrand } from '../config/schema';
-import { REQUIRED_BOT_SCOPES, scopeApplyUrl } from './lark-info';
 
 export async function runRegistrationWizard(): Promise<AppConfig> {
   console.log('\n未检测到飞书应用配置，进入扫码创建向导。\n');
@@ -43,17 +42,6 @@ export async function runRegistrationWizard(): Promise<AppConfig> {
       '  ⚠️ 未拿到扫码用户的 open_id；首次启动时 bridge 会自行调 application/v6 API 解析当前 owner。',
     );
   }
-
-  // The SDK's registerApp() doesn't accept a scopes parameter — pre-granting
-  // scopes during QR creation isn't supported by the platform. Best we can
-  // do is print a clear next-step pointing the operator at the one-click
-  // scope-apply page. Without these scopes, /config will detect the gap and
-  // surface the same "去一键授权" button card.
-  const applyUrl = scopeApplyUrl(result.client_id, [...REQUIRED_BOT_SCOPES]);
-  console.log('\n下一步 — 申请 bot 权限（让 /config 的邮箱搜索可用）:');
-  console.log(`  需要的 scope:  ${REQUIRED_BOT_SCOPES.join(', ')}`);
-  console.log(`  一键申请链接:  ${applyUrl}`);
-  console.log('  在浏览器打开链接、按提示授权后再使用 bridge 即可。');
 
   const cfg: AppConfig = {
     accounts: {

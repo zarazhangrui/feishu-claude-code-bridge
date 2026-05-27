@@ -18,7 +18,7 @@ import {
 } from '../card/run-state';
 import { renderText } from '../card/text-renderer';
 import { tryHandleCommand, type Controls } from '../commands';
-import { fetchAppMeta, fetchKnownChats } from './lark-info';
+import { fetchAppOwnerId, fetchKnownChats } from './lark-info';
 import type { AppConfig } from '../config/schema';
 import {
   getAgentStopGraceMs,
@@ -350,7 +350,7 @@ async function sendNonAllowedGroupHint(
   const content = JSON.stringify({
     text:
       '👋 当前群尚未加入响应列表，所以 bot 不会处理消息。\n' +
-      '群主 / 管理员可在本群发 /invite group 加入白名单。',
+      'Bot owner/管理员可在本群发 /invite group 加入白名单。',
   });
   try {
     await channel.rawClient.im.v1.message.reply({
@@ -379,12 +379,11 @@ function startAccessRefreshTimer(
 ): { stop: () => void } {
   const REFRESH_INTERVAL_MS = 30 * 60_000;
   const refresh = async (): Promise<void> => {
-    const [meta, chats] = await Promise.all([
-      fetchAppMeta(channel, appId),
+    const [ownerId, chats] = await Promise.all([
+      fetchAppOwnerId(channel, appId),
       fetchKnownChats(channel),
     ]);
-    controls.botOwnerId = meta.ownerId;
-    controls.botGrantedScopes = meta.grantedScopes;
+    controls.botOwnerId = ownerId;
     controls.knownChats = chats;
   };
   void refresh();
@@ -441,7 +440,8 @@ async function intakeMessage(deps: IntakeDeps): Promise<void> {
   //
   // Post-2026-05 default-secure semantics:
   //   - DM: sender must be creator, admin, or in allowedUsers. Empty = drop.
-  //   - Group: chat must be in allowedChats (creator bypasses). Empty = drop.
+  //   - Group: chat must be in allowedChats (creator + admins bypass).
+  //     Empty = drop.
   // See wiki/T7EswTtVsiF1hMkCYNxc51ASnZc and schema.ts AppAccess docstring.
   const isP2p = msg.chatType === 'p2p';
   if (!isUserAllowed(controls, msg.senderId, isP2p)) {

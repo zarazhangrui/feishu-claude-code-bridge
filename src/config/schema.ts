@@ -1,5 +1,8 @@
 export type TenantBrand = 'feishu' | 'lark';
 
+/** Which local coding-agent CLI the bridge drives. Default 'claude'. */
+export type AgentKind = 'claude' | 'codex';
+
 /**
  * SecretRef points at a secret stored outside this file — keeps secrets out
  * of `config.json` so backups / accidental git commits / log dumps don't
@@ -90,6 +93,13 @@ export interface AppAccess {
 }
 
 export interface AppPreferences {
+  /**
+   * Which local coding-agent CLI to drive: 'claude' (Claude Code, the
+   * default) or 'codex' (OpenAI Codex). Selected at process start; switching
+   * requires editing config.json and restarting the bridge. No CLI surface
+   * yet — by design, since it's a deploy-time choice.
+   */
+  agent?: AgentKind;
   /** Reply rendering mode for IM (group/p2p) messages. Default 'card'. */
   messageReply?: MessageReplyMode;
   /**
@@ -198,6 +208,14 @@ export function getMessageReplyMode(cfg: AppConfig): MessageReplyMode {
   }
   if (raw === 'card' || raw === 'markdown' || raw === 'text') return raw;
   return 'markdown';
+}
+
+/** Resolve which agent CLI to drive. Unknown / unset values fall back to
+ * 'claude' so existing deployments are unaffected on upgrade. Accepts the
+ * minimal shape (just `preferences`) because it's called at process-start
+ * from sites that only hold a possibly-incomplete config. */
+export function getAgentKind(cfg: Pick<AppConfig, 'preferences'>): AgentKind {
+  return cfg.preferences?.agent === 'codex' ? 'codex' : 'claude';
 }
 
 /** Resolve the show-tool-calls preference with default fallback. */

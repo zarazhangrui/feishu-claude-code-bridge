@@ -1199,13 +1199,16 @@ async function showResultCardInPlace(
 }
 
 async function cancelConfig(ctx: CommandContext): Promise<void> {
-  if (ctx.fromCardAction) {
-    const formMsgId = ctx.msg.messageId;
-    void (async () => {
-      await new Promise((r) => setTimeout(r, FORM_SETTLE_MS));
-      await showResultCardInPlace(ctx, formMsgId, configCancelledCard());
-    })();
-  }
+  if (!ctx.fromCardAction) return;
+  // "取消" just dismisses the form — nothing is saved until 提交, so there's
+  // no "configuration" to cancel. Recall the card so it disappears instead
+  // of leaving a "已取消" notice behind.
+  const formMsgId = ctx.msg.messageId;
+  void (async () => {
+    await new Promise((r) => setTimeout(r, FORM_SETTLE_MS));
+    await recallMessage(ctx, formMsgId);
+    forgetManagedCard(formMsgId);
+  })();
 }
 
 async function submitConfig(ctx: CommandContext): Promise<void> {

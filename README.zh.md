@@ -1,6 +1,6 @@
 # lark-channel-bridge
 
-把飞书 / Lark 消息和本地 Claude Code CLI 打通的轻量 bot，用一条命令起服务，扫码绑应用，在飞书里和 Claude 对话、让它读图 / 改代码。
+把飞书 / Lark 消息和本地编码 Agent CLI 打通的轻量 bot —— 默认用 **Claude Code**，也可改用 **OpenAI Codex**。用一条命令起服务，扫码绑应用，在飞书里和你的 Agent 对话、让它读图 / 改代码。
 
 [English README](./README.md)
 
@@ -19,7 +19,7 @@
 ## 前置条件
 
 - Node.js **≥ 20**
-- `claude` CLI 已安装并登录：https://docs.anthropic.com/en/docs/claude-code/quickstart
+- 一个编码 Agent CLI 已安装并登录 —— **二选一**：`claude`（[Claude Code 快速上手](https://docs.anthropic.com/en/docs/claude-code/quickstart)）**或** `codex`（`npm i -g @openai/codex` 后 `codex login`）。详见下方[选择 Agent](#选择-agentclaude-code-还是-codex)。
 - 一个飞书 / Lark PersonalAgent 应用（首次启动的扫码向导能帮你创建）
 
 ## 安装
@@ -42,6 +42,26 @@ lark-channel-bridge run
 2. 用飞书 App 扫码
 3. 选择 / 创建 PersonalAgent 应用
 4. 成功后凭据写入 `~/.lark-channel/config.json`
+
+## 选择 Agent：Claude Code 还是 Codex
+
+默认 bridge 驱动 `claude` CLI，也可以改成驱动 **OpenAI Codex**（`codex exec`）—— 聊天体验一致：流式卡片、每个 chat 独立会话（多轮自动续接）、`/stop`、工具调用渲染都在。在 `~/.lark-channel/config.json` 里选：
+
+```json
+{
+  "preferences": {
+    "agent": "codex",
+    "codexReasoningEffort": "medium"
+  }
+}
+```
+
+- **`agent`**：`"claude"`（默认）或 `"codex"`。这是**启动时**的选择 —— 改完要**重启 bridge**。不填（或填了非 `"codex"` 的值）都走 Claude。
+- **`codexReasoningEffort`**（仅 Codex）：`"minimal" | "low" | "medium" | "high"`。会作为 `model_reasoning_effort` 传给 `codex exec`；不填则用 Codex 自己的默认。`agent` 为 `"claude"` 时忽略此项。
+
+bridge 每条消息起一个新的 `codex exec` 进程，多轮之间 resume 同一个 Codex thread。用量 / 计费走你 `codex` CLI 登录的那个账户 —— 跟你自己在终端里跑 Codex 完全一样，`codex exec` 不单独计费。
+
+> **关于 Codex agent 的说明**：流式是**消息级**的（Codex 整条消息一起吐，不是逐 token），所以卡片刷新比 Claude 略粗。普通对话和 shell / 工具调用是充分验证过的主路径；更高级的 bridge 约定（bot 主动发回调卡片、`lark-cli` OAuth）依赖 Codex 遵循注入的提示，成熟度不如 Claude 下。
 
 ## 命令速查
 
@@ -105,7 +125,7 @@ daemon 的 stdout / stderr 写到 `~/.lark-channel/logs/daemon-stdout.log` 和 `
 | 路径 | 内容 |
 |---|---|
 | `~/.lark-channel/config.json` | 应用凭据（App ID / Secret），权限 600 |
-| `~/.lark-channel/sessions.json` | 每个 chat / 话题 的 Claude session id + cwd（+ 可选的 `/timeout` 覆盖） |
+| `~/.lark-channel/sessions.json` | 每个 chat / 话题 的 Agent session/thread id + cwd（+ 可选的 `/timeout` 覆盖） |
 | `~/.lark-channel/workspaces.json` | 工作空间映射 |
 | `~/.lark-channel/processes.json` | 当前在跑的 start 进程注册中心（`ps`/`stop` 用），死进程会被自动清理 |
 | `~/.lark-channel/media/<chatId>/` | 下载的图片 / 文件，24h 自动清理 |

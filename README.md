@@ -1,6 +1,6 @@
 # lark-channel-bridge
 
-A lightweight bot that bridges Feishu / Lark messenger with your local Claude Code CLI. Run one command, scan a QR code to bind a Lark app, and talk to Claude from chat — read screenshots, edit code, anything you'd do at the terminal.
+A lightweight bot that bridges Feishu / Lark messenger with your local coding-agent CLI — **Claude Code** by default, or **OpenAI Codex**. Run one command, scan a QR code to bind a Lark app, and drive your agent from chat — read screenshots, edit code, anything you'd do at the terminal.
 
 [中文 README](./README.zh.md)
 
@@ -19,7 +19,7 @@ A lightweight bot that bridges Feishu / Lark messenger with your local Claude Co
 ## Prerequisites
 
 - Node.js **>= 20**
-- `claude` CLI installed and logged in — see https://docs.anthropic.com/en/docs/claude-code/quickstart
+- A coding-agent CLI installed and logged in — **either** `claude` ([Claude Code quickstart](https://docs.anthropic.com/en/docs/claude-code/quickstart)) **or** `codex` (`npm i -g @openai/codex` then `codex login`). See [Choosing the agent](#choosing-the-agent-claude-code-or-codex) below.
 - A Lark / Feishu **PersonalAgent** app (the QR-code wizard on first launch can create one for you).
 
 ## Install
@@ -42,6 +42,26 @@ The first run detects there's no app configured and **opens a QR-code wizard**:
 2. Scan it with the Feishu / Lark app.
 3. Pick or create a PersonalAgent app.
 4. Credentials are written to `~/.lark-channel/config.json`.
+
+## Choosing the agent: Claude Code or Codex
+
+By default the bridge drives the `claude` CLI. It can drive **OpenAI Codex** (`codex exec`) instead — same chat flow: streaming card, per-chat sessions (resumed across turns), `/stop`, and tool-call rendering. Select it in `~/.lark-channel/config.json`:
+
+```json
+{
+  "preferences": {
+    "agent": "codex",
+    "codexReasoningEffort": "medium"
+  }
+}
+```
+
+- **`agent`**: `"claude"` (default) or `"codex"`. This is a process-start choice — restart the bridge after changing it. Omitting it (or any value other than `"codex"`) keeps Claude.
+- **`codexReasoningEffort`** (Codex only): `"minimal" | "low" | "medium" | "high"`. Passed to `codex exec` as `model_reasoning_effort`; omit to let Codex use its own default. Ignored when `agent` is `"claude"`.
+
+The bridge spawns a fresh `codex exec` per message and resumes the Codex thread across turns. Usage/billing goes to whatever account your `codex` CLI is logged into — the same as running Codex yourself at the terminal; `codex exec` is not billed separately.
+
+> **Notes on the Codex agent.** Streaming is at message granularity (Codex emits whole messages, not token-by-token), so the card refreshes a little more coarsely than with Claude. Plain conversation and shell/tool calls are the well-tested path; the higher-level bridge conventions (the bot proactively sending callback cards, `lark-cli` OAuth) depend on Codex following injected instructions and are less battle-tested than under Claude.
 
 ## Commands
 
@@ -105,7 +125,7 @@ Daemon logs go to `~/.lark-channel/logs/daemon-stdout.log` and `daemon-stderr.lo
 | Path | Content |
 |---|---|
 | `~/.lark-channel/config.json` | App credentials (App ID / Secret), mode 600 |
-| `~/.lark-channel/sessions.json` | Claude session id + cwd per chat / topic (+ optional `/timeout` override) |
+| `~/.lark-channel/sessions.json` | Agent session/thread id + cwd per chat / topic (+ optional `/timeout` override) |
 | `~/.lark-channel/workspaces.json` | Named-workspace map |
 | `~/.lark-channel/processes.json` | Process registry for live `start` instances (used by `ps`/`stop`); dead PIDs are auto-pruned |
 | `~/.lark-channel/media/<chatId>/` | Downloaded images / files, cleaned up after 24h |

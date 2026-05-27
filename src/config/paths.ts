@@ -7,6 +7,7 @@ export const paths = {
   appDir,
   cacheDir: appDir,
   configFile: join(appDir, 'config.json'),
+  cronJobsFile: join(appDir, 'cron-jobs.json'),
   sessionsFile: join(appDir, 'sessions.json'),
   workspacesFile: join(appDir, 'workspaces.json'),
   processesFile: join(appDir, 'processes.json'),

@@ -19,6 +19,7 @@ import {
 import { renderText } from '../card/text-renderer';
 import { tryHandleCommand, type Controls } from '../commands';
 import type { AppConfig } from '../config/schema';
+import { CronScheduler } from '../cron/scheduler';
 import {
   getAgentStopGraceMs,
   getMaxConcurrentRuns,
@@ -316,14 +317,27 @@ export async function startChannel(deps: StartChannelDeps): Promise<BridgeChanne
     forceReconnect: () => controls.restart(),
   });
 
+  // Start cron scheduler if a cron store is configured
+  if (controls.cronStore) {
+    const scheduler = new CronScheduler({
+      channel,
+      agent,
+      store: controls.cronStore,
+      getStopGraceMs: () => getAgentStopGraceMs(controls.cfg),
+    });
+    controls.cronScheduler = scheduler;
+    scheduler.start();
+  }
+
   return {
     channel,
     disconnect: async () => {
+      controls.cronScheduler?.stop();
       keepalive.stop();
       pending.cancelAll();
       await channel.disconnect();
       await activeRuns.stopAll();
-      await Promise.allSettled([sessions.flush(), workspaces.flush()]);
+      await Promise.allSettled([sessions.flush(), workspaces.flush(), controls.cronStore?.flush()]);
     },
   };
 }
@@ -497,11 +511,11 @@ async function runAgentBatch(deps: RunBatchDeps): Promise<void> {
   log.info('prompt', 'built', { promptChars: prompt.length, quotes: quotes.length });
 
   const cwd = workspaces.cwdFor(scope) ?? homedir();
-  const resumeFrom = sessions.resumeFor(scope, cwd);
+  const resumeFrom = sessions.resumeFor(agent.id, scope, cwd);
   if (resumeFrom) {
     log.info('session', 'resume', { sessionId: resumeFrom, cwd });
   } else {
-    const stale = sessions.getRaw(scope);
+    const stale = sessions.getRaw(agent.id, scope);
     if (stale && stale.cwd !== cwd) {
       log.info('session', 'stale-cleared', { staleCwd: stale.cwd, newCwd: cwd });
       sessions.clear(scope);
@@ -565,7 +579,7 @@ async function runAgentBatch(deps: RunBatchDeps): Promise<void> {
           card: {
             initial: renderCard(initialState),
             producer: async (ctrl) => {
-              await processAgentStream(handle, sessions, scope, cwd, idleTimeoutMs, async (state) => {
+              await processAgentStream(handle, agent.id, sessions, scope, cwd, idleTimeoutMs, async (state) => {
                 await ctrl.update(renderCard(filterForPrefs(state)));
               });
             },
@@ -578,7 +592,7 @@ async function runAgentBatch(deps: RunBatchDeps): Promise<void> {
         chatId,
         {
           markdown: async (ctrl) => {
-            await processAgentStream(handle, sessions, scope, cwd, idleTimeoutMs, async (state) => {
+            await processAgentStream(handle, agent.id, sessions, scope, cwd, idleTimeoutMs, async (state) => {
               await ctrl.setContent(renderText(filterForPrefs(state)));
             });
           },
@@ -590,7 +604,7 @@ async function runAgentBatch(deps: RunBatchDeps): Promise<void> {
       // the run, then post the final rendered text once as a plain markdown
       // (msg_type=post) message — no card, no streaming, no typewriter.
       let finalState: RunState = initialState;
-      await processAgentStream(handle, sessions, scope, cwd, idleTimeoutMs, async (state) => {
+      await processAgentStream(handle, agent.id, sessions, scope, cwd, idleTimeoutMs, async (state) => {
         finalState = state;
       });
       const body = renderText(filterForPrefs(finalState));
@@ -615,6 +629,7 @@ async function runAgentBatch(deps: RunBatchDeps): Promise<void> {
  */
 async function processAgentStream(
   handle: RunHandle,
+  agentId: string,
   sessions: SessionStore,
   scope: string,
   cwd: string,
@@ -678,7 +693,7 @@ async function processAgentStream(
       if (evt.type === 'system') {
         if (evt.sessionId) {
           const effectiveCwd = evt.cwd ?? cwd;
-          sessions.set(scope, evt.sessionId, effectiveCwd);
+          sessions.set(agentId, scope, evt.sessionId, effectiveCwd);
           log.info('session', 'set', { sessionId: evt.sessionId });
         }
         continue;

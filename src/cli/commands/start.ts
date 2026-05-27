@@ -2,6 +2,7 @@ import dns from 'node:dns';
 import { createInterface } from 'node:readline';
 import pkg from '../../../package.json';
 import { ClaudeAdapter } from '../../agent/claude/adapter';
+import { SwappableAgent } from '../../agent/swappable';
 import { startChannel, type BridgeChannel } from '../../bot/channel';
 import { runRegistrationWizard } from '../../bot/wizard';
 import type { Controls } from '../../commands';
@@ -28,6 +29,7 @@ import {
 } from '../../runtime/registry';
 import { SessionStore } from '../../session/store';
 import { WorkspaceStore } from '../../workspace/store';
+import { CronStore } from '../../cron/store';
 
 // Prefer IPv4 — Node 20+ defaults to "verbatim" which respects whatever
 // the resolver returns first; in IPv6-broken networks (WSL2, certain VPNs,
@@ -76,10 +78,12 @@ export async function runStart(opts: StartOptions): Promise<void> {
 
   await preFlightChecks({ skipCheckLarkCli: opts.skipCheckLarkCli });
 
-  const agent = new ClaudeAdapter();
+  const agent = new SwappableAgent(new ClaudeAdapter());
   if (!(await agent.isAvailable())) {
     console.error('✗ 未找到 claude CLI。请先安装 Claude Code：');
     console.error('  https://docs.anthropic.com/en/docs/claude-code/quickstart');
+    console.error('');
+    console.error('  也支持 OpenCode (opencode CLI)，安装后发 /agent opencode 切换。');
     process.exit(1);
   }
 
@@ -87,6 +91,8 @@ export async function runStart(opts: StartOptions): Promise<void> {
   await sessions.load();
   const workspaces = new WorkspaceStore();
   await workspaces.load();
+  const cronStore = new CronStore();
+  await cronStore.load();
 
   await gcMediaCache(MEDIA_GC_MAX_AGE_MS);
   await gcOldLogs();
@@ -139,6 +145,7 @@ export async function runStart(opts: StartOptions): Promise<void> {
     configPath,
     cfg,
     processId: entry.id,
+    cronStore,
     async exit() {
       await stop('exit-command');
     },

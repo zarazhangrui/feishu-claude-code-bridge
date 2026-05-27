@@ -46,4 +46,5 @@ export interface AgentAdapter {
   readonly displayName: string;
   isAvailable(): Promise<boolean>;
   run(opts: AgentRunOptions): AgentRun;
+  swap?(adapter: AgentAdapter): void;
 }

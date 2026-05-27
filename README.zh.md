@@ -80,7 +80,12 @@ daemon 的 stdout / stderr 写到 `~/.lark-channel/logs/daemon-stdout.log` 和 `
 ### 在飞书里用的斜杠命令
 
 | 命令 | 作用 |
-|---|---|
+|---|---|---|
+| `/agent [claude\|opencode]` | 查看当前智能体，或在 Claude Code 和 OpenCode 之间切换 |
+| `/cron <描述>` | 用自然语言创建定时/循环任务（如"每天早上9点跑测试"） |
+| `/cron list` | 列出所有定时任务，支持交互卡片管理 |
+| `/cron remove <id>` | 删除指定任务 |
+| `/cron toggle <id>` | 启用 / 禁用指定任务 |
 | `/new` `/reset` | 清空当前 chat 的会话 |
 | `/cd <path>` | 切换工作目录（会重置 session） |
 | `/ws list` | 列所有命名工作空间（卡片 + 按钮） |
@@ -107,6 +112,7 @@ daemon 的 stdout / stderr 写到 `~/.lark-channel/logs/daemon-stdout.log` 和 `
 | `~/.lark-channel/config.json` | 应用凭据（App ID / Secret），权限 600 |
 | `~/.lark-channel/sessions.json` | 每个 chat / 话题 的 Claude session id + cwd（+ 可选的 `/timeout` 覆盖） |
 | `~/.lark-channel/workspaces.json` | 工作空间映射 |
+| `~/.lark-channel/cron-jobs.json` | 定时任务持久化存储 |
 | `~/.lark-channel/processes.json` | 当前在跑的 start 进程注册中心（`ps`/`stop` 用），死进程会被自动清理 |
 | `~/.lark-channel/media/<chatId>/` | 下载的图片 / 文件，24h 自动清理 |
 | `~/.lark-channel/logs/YYYY-MM-DD.log` | 结构化运行日志（JSON line），按天滚动；启动时清理超过 7 天的老文件（`LARK_CHANNEL_LOG_DAYS` 环境变量可改）；`/doctor` 命令读它做诊断 |

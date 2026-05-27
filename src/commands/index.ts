@@ -2,7 +2,13 @@ import { stat } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import type { LarkChannel, NormalizedMessage } from '@larksuiteoapi/node-sdk';
 import type { AgentAdapter } from '../agent/types';
+import { ClaudeAdapter } from '../agent/claude/adapter';
+import { OpenCodeAdapter } from '../agent/opencode/adapter';
+import { SwappableAgent } from '../agent/swappable';
 import type { ActiveRuns } from '../bot/active-runs';
+import type { CronScheduler } from '../cron/scheduler';
+import type { CronStore } from '../cron/store';
+import { parseCronDescription } from '../cron/parser';
 import {
   accountCurrentCard,
   accountFailureCard,
@@ -11,7 +17,7 @@ import {
 } from '../card/account-cards';
 import { configCancelledCard, configFormCard, configSavedCard } from '../card/config-card';
 import { forgetManagedCard, sendManagedCard, updateManagedCard } from '../card/managed';
-import { helpCard, resumeCard, statusCard, workspacesCard } from '../card/templates';
+import { cronListCard, helpCard, resumeCard, statusCard, workspacesCard } from '../card/templates';
 import type { AppConfig, MessageReplyMode, TenantBrand } from '../config/schema';
 import {
   getAgentStopGraceMs,
@@ -55,6 +61,10 @@ export interface Controls {
   /** This process's short id in the registry. Used by /ps to highlight the
    * receiving process and by /exit to detect self-target. */
   processId: string;
+  /** Optional cron store for managing scheduled tasks. */
+  cronStore?: CronStore;
+  /** Optional cron scheduler for executing scheduled tasks. */
+  cronScheduler?: CronScheduler;
 }
 
 export interface CommandContext {
@@ -98,10 +108,13 @@ const handlers: Record<string, Handler> = {
   '/config': handleConfig,
   '/stop': handleStop,
   '/timeout': handleTimeout,
+  '/定时': handleCron,
+  '/cron': handleCron,
   '/ps': handlePs,
   '/exit': handleExit,
   '/doctor': handleDoctor,
   '/reconnect': handleReconnect,
+  '/agent': handleAgent,
 };
 
 /**
@@ -358,7 +371,7 @@ async function handleResume(args: string, ctx: CommandContext): Promise<void> {
 
   const cwd = ctx.workspaces.cwdFor(ctx.scope) ?? homedir();
   const sessions = await listRecentSessions(cwd, limit);
-  const currentSession = ctx.sessions.getRaw(ctx.scope);
+  const currentSession = ctx.sessions.getRaw(ctx.agent.id, ctx.scope);
   const entries = sessions.map((s) => ({
     sessionId: s.sessionId,
     preview: s.preview,
@@ -373,7 +386,7 @@ async function handleResume(args: string, ctx: CommandContext): Promise<void> {
 async function applyResume(sessionId: string, ctx: CommandContext): Promise<void> {
   const cwd = ctx.workspaces.cwdFor(ctx.scope) ?? homedir();
   ctx.activeRuns.interrupt(ctx.scope);
-  ctx.sessions.set(ctx.scope, sessionId, cwd);
+  ctx.sessions.set(ctx.agent.id, ctx.scope, sessionId, cwd);
   await reply(
     ctx,
     `✓ 已恢复会话 \`${sessionId.slice(0, 8)}…\`。接着发消息就行。`,
@@ -382,7 +395,7 @@ async function applyResume(sessionId: string, ctx: CommandContext): Promise<void
 
 async function handleStatus(_args: string, ctx: CommandContext): Promise<void> {
   const cwd = ctx.workspaces.cwdFor(ctx.scope) ?? homedir();
-  const sess = ctx.sessions.getRaw(ctx.scope);
+  const sess = ctx.sessions.getRaw(ctx.agent.id, ctx.scope);
   const card = statusCard({
     cwd,
     sessionId: sess?.sessionId,
@@ -450,6 +463,219 @@ async function handleTimeout(args: string, ctx: CommandContext): Promise<void> {
   ctx.sessions.setIdleTimeoutMinutes(ctx.scope, n);
   log.info('command', 'timeout-set', { scope: ctx.scope, minutes: n });
   await reply(ctx, `✅ 当前 session 探活已设为 ${n} 分钟。`);
+}
+
+async function handleCron(args: string, ctx: CommandContext): Promise<void> {
+  const parts = args.trim().split(/\s+/);
+  const sub = parts[0] ?? '';
+  const rest = parts.slice(1).join(' ').trim();
+
+  if (!sub || sub === 'list') {
+    return handleCronList(ctx);
+  }
+  if (sub === 'remove') {
+    return handleCronRemove(rest, ctx);
+  }
+  if (sub === 'toggle' || sub === 'pause' || sub === 'resume') {
+    return handleCronToggle(rest, ctx);
+  }
+  // Unrecognized subcommand → treat as natural language creation
+  return handleCronCreate(args.trim(), ctx);
+}
+
+async function handleCronList(ctx: CommandContext): Promise<void> {
+  const store = ctx.controls.cronStore;
+  if (!store) {
+    await reply(ctx, '❌ 定时任务模块未启用。');
+    return;
+  }
+  const jobs = store.list();
+  const entries = jobs.map((j) => ({
+    id: j.id,
+    label: j.label,
+    schedule: j.schedule,
+    runAt: j.runAt,
+    enabled: j.enabled,
+    lastRunAt: j.lastRunAt,
+    lastRunStatus: j.lastRunStatus,
+    prompt: j.prompt,
+  }));
+  const card = cronListCard(entries);
+  await ctx.channel.send(ctx.msg.chatId, { card }, { replyTo: ctx.msg.messageId });
+}
+
+async function handleCronRemove(targetId: string, ctx: CommandContext): Promise<void> {
+  const store = ctx.controls.cronStore;
+  const scheduler = ctx.controls.cronScheduler;
+  if (!store) {
+    await reply(ctx, '❌ 定时任务模块未启用。');
+    return;
+  }
+  if (!targetId) {
+    await reply(ctx, '用法：`/cron remove <任务ID>`，发 `/cron list` 查看任务 ID。');
+    return;
+  }
+  const removed = store.remove(targetId);
+  if (!removed) {
+    await reply(ctx, `❌ 未找到定时任务: \`${targetId}\``);
+    return;
+  }
+  scheduler?.unschedule(targetId);
+  await reply(ctx, `✅ 已删除定时任务 \`${targetId}\``);
+}
+
+async function handleCronToggle(targetId: string, ctx: CommandContext): Promise<void> {
+  const store = ctx.controls.cronStore;
+  const scheduler = ctx.controls.cronScheduler;
+  if (!store) {
+    await reply(ctx, '❌ 定时任务模块未启用。');
+    return;
+  }
+  if (!targetId) {
+    await reply(ctx, '用法：`/cron toggle <任务ID>`，发 `/cron list` 查看任务 ID。');
+    return;
+  }
+  const job = store.get(targetId);
+  if (!job) {
+    await reply(ctx, `❌ 未找到定时任务: \`${targetId}\``);
+    return;
+  }
+  if (job.runAt) {
+    await reply(ctx, `⏳ 一次性任务不支持暂停/恢复。如需取消，发 \`/cron remove ${targetId}\``);
+    return;
+  }
+  const newEnabled = !job.enabled;
+  store.update(targetId, { enabled: newEnabled });
+  if (newEnabled) {
+    scheduler?.schedule(job);
+    await reply(ctx, `✅ 已恢复定时任务 \`${targetId}\`（${job.label}）`);
+  } else {
+    scheduler?.unschedule(targetId);
+    await reply(ctx, `⏸ 已暂停定时任务 \`${targetId}\`（${job.label}）`);
+  }
+}
+
+async function handleCronCreate(description: string, ctx: CommandContext): Promise<void> {
+  const store = ctx.controls.cronStore;
+  const scheduler = ctx.controls.cronScheduler;
+  if (!store || !scheduler) {
+    await reply(ctx, '❌ 定时任务模块未启用。');
+    return;
+  }
+  if (!description) {
+    await reply(ctx, '用法：`/cron <描述>`，例如：`/cron 每天早上9点检查数据库`');
+    return;
+  }
+
+  await reply(ctx, '🔍 正在解析你的定时任务描述...');
+
+  const cwd = ctx.workspaces.cwdFor(ctx.scope);
+  const result = await parseCronDescription(ctx.agent, description, cwd ?? process.cwd());
+
+  if (!result.ok) {
+    await reply(ctx, `❌ ${result.error}`);
+    return;
+  }
+
+  const { schedule, delayMinutes, prompt, label } = result.cron;
+
+  // One-time delayed task
+  if (delayMinutes) {
+    const runAt = Date.now() + delayMinutes * 60_000;
+    const job = store.add({
+      schedule: '',
+      runAt,
+      prompt,
+      label,
+      cwd: cwd ?? process.cwd(),
+      chatId: ctx.msg.chatId,
+      senderId: ctx.msg.senderId,
+    });
+    scheduler.schedule(job);
+
+    const timeStr = formatRunAt(runAt);
+    const lines = [
+      `✅ **定时任务已创建** #${job.id}`,
+      '',
+      `📌 **${label}**`,
+      `🕐 ${delayMinutes} 分钟后（${timeStr}）执行一次`,
+      `📂 \`${job.cwd}\``,
+      '',
+      `💡 发 \`/cron remove ${job.id}\` 可取消。`,
+    ];
+    await reply(ctx, lines.join('\n'));
+    return;
+  }
+
+  // Recurring (cron) task
+  const job = store.add({
+    schedule: schedule!,
+    prompt,
+    label,
+    cwd: cwd ?? process.cwd(),
+    chatId: ctx.msg.chatId,
+    senderId: ctx.msg.senderId,
+  });
+
+  scheduler.schedule(job);
+
+  const humanSchedule = humanReadableCron(schedule!) || schedule;
+  const lines = [
+    `✅ **定时任务已创建** #${job.id}`,
+    '',
+    `📌 **${label}**`,
+    `🕐 ${humanSchedule}`,
+    `📂 \`${job.cwd}\``,
+    '',
+    `💡 发 \`/cron list\` 查看管理，发 \`/cron remove ${job.id}\` 删除。`,
+  ];
+  await reply(ctx, lines.join('\n'));
+}
+
+function formatRunAt(ts: number): string {
+  const d = new Date(ts);
+  const pad = (n: number) => String(n).padStart(2, '0');
+  return `${d.getMonth() + 1}/${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
+}
+
+function humanReadableCron(expr: string): string | null {
+  const parts = expr.trim().split(/\s+/);
+  if (parts.length !== 5) return null;
+  const min = parts[0] ?? '0';
+  const hour = parts[1] ?? '*';
+  const dayOfWeek = parts[4] ?? '*';
+
+  if (hour === '*' && min === '*') return '每分钟执行';
+  if (hour === '*' && min.startsWith('*/')) {
+    const n = min.replace('*/', '');
+    return `每 ${n} 分钟执行`;
+  }
+  if (hour.startsWith('*/') && min === '0') {
+    const n = hour.replace('*/', '');
+    return `每 ${n} 小时执行`;
+  }
+  if (min === '30' && hour === '*') return '每半小时执行';
+  if (dayOfWeek === '1-5' && min === '0') {
+    return `工作日每天早上 ${hour.padStart(2, '0')}:00`;
+  }
+  if (dayOfWeek !== '*' && min === '0') {
+    const weekdays: Record<string, string> = {
+      '0': '日', '1': '一', '2': '二', '3': '三', '4': '四', '5': '五', '6': '六',
+    };
+    if (dayOfWeek.includes(',')) {
+      const days = dayOfWeek.split(',').map((d) => (weekdays as Record<string, string>)[d] ?? d).join('、');
+      return `每周${days} ${hour.padStart(2, '0')}:00`;
+    }
+    const range = dayOfWeek.match(/^(\d+)-(\d+)$/);
+    if (range) {
+      const start = weekdays[range[1] as string] ?? range[1];
+      const end = weekdays[range[2] as string] ?? range[2];
+      return `每周${start}到${end} ${hour.padStart(2, '0')}:00`;
+    }
+    return `每周${(weekdays as Record<string, string>)[dayOfWeek] ?? dayOfWeek} ${hour.padStart(2, '0')}:00`;
+  }
+  if (min === '0') return `每天早上 ${hour.padStart(2, '0')}:00`;
+  return `每天 ${hour.padStart(2, '0')}:${min.padStart(2, '0')}`;
 }
 
 async function handlePs(_args: string, ctx: CommandContext): Promise<void> {
@@ -701,6 +927,56 @@ async function handleDoctor(args: string, ctx: CommandContext): Promise<void> {
   } finally {
     ctx.activeRuns.unregister(ctx.scope, run);
   }
+}
+
+async function handleAgent(args: string, ctx: CommandContext): Promise<void> {
+  const name = args.trim().toLowerCase();
+
+  if (!name) {
+    await reply(ctx, `🤖 当前 agent：**${ctx.agent.displayName}**\n可用：\`/agent opencode\`、\`/agent claude\``);
+    return;
+  }
+
+  if (name === 'opencode' || name === 'open') {
+    if (ctx.agent.id === 'opencode') {
+      await reply(ctx, '✅ 已经是 opencode。');
+      return;
+    }
+    const adapter = new OpenCodeAdapter();
+    if (!(await adapter.isAvailable())) {
+      await reply(ctx, '❌ opencode 不可用，请先安装：https://opencode.ai');
+      return;
+    }
+    await adapter.ensureServer();
+    ctx.agent.swap?.(adapter);
+    ctx.sessions.clear(ctx.scope);
+    await reply(ctx, `✅ 已切换到 opencode。\n（当前会话已重置，agent 间 session 不兼容）`);
+    return;
+  }
+
+  if (name === 'claude' || name === 'claude-code') {
+    if (ctx.agent.id === 'claude') {
+      await reply(ctx, '✅ 已经是 claude。');
+      return;
+    }
+    const adapter = new ClaudeAdapter();
+    if (!(await adapter.isAvailable())) {
+      await reply(ctx, '❌ claude CLI 不可用。请先安装：https://docs.anthropic.com/en/docs/claude-code/quickstart');
+      return;
+    }
+    // Kill opencode serve process before switching away
+    const swappable = ctx.agent as SwappableAgent;
+    const current = swappable.current;
+    if (current instanceof OpenCodeAdapter) {
+      await current.killServer();
+    }
+    ctx.agent.swap?.(adapter);
+    ctx.sessions.clear(ctx.scope);
+    await reply(ctx, `✅ 已切换到 claude。\n（当前会话已重置，agent 间 session 不兼容）`);
+    return;
+  }
+
+  await reply(ctx, `❌ 未知 agent：\`${name}\`\n可用：\`/agent opencode\`、\`/agent claude\``);
 }
 
 async function handleHelp(_args: string, ctx: CommandContext): Promise<void> {

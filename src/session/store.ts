@@ -4,19 +4,27 @@ import { paths } from '../config/paths';
 import { log } from '../core/logger';
 
 export interface SessionEntry {
-  /** May be absent if the entry was created by /timeout before any run
-   * recorded a session id. Treat absence as "no resumable session". */
   sessionId?: string;
-  /** Pinned cwd for the resumable session. Absent for the same reason. */
   cwd?: string;
   updatedAt: number;
-  /** Per-scope idle-timeout override (minutes). 0 = explicitly off for this
-   * scope, undefined = follow global default. /new clears the whole entry,
-   * so this resets to "follow global" when the user starts a new session. */
   idleTimeoutMinutes?: number;
 }
 
 type SessionMap = Record<string, SessionEntry>;
+
+/**
+ * Sessions are keyed by `${agentId}:${chatId}` to prevent cross-agent
+ * contamination (e.g. an opencode session resurfacing when running
+ * under claude). Scope-level settings (idleTimeout, etc.) are keyed
+ * by bare `chatId`.
+ */
+function sessionKey(agentId: string, chatId: string): string {
+  return `${agentId}:${chatId}`;
+}
+
+function isSessionKey(key: string): boolean {
+  return key.includes(':');
+}
 
 export class SessionStore {
   private data: SessionMap = {};
@@ -32,25 +40,35 @@ export class SessionStore {
       const text = await readFile(this.path, 'utf8');
       const raw = JSON.parse(text) as Record<string, Partial<SessionEntry>>;
       this.data = {};
-      for (const [chatId, entry] of Object.entries(raw)) {
+      for (const [key, entry] of Object.entries(raw)) {
         if (!entry || typeof entry.updatedAt !== 'number') continue;
-        // Drop entries without a `cwd`/`sessionId` pair *unless* there's
-        // some other persisted state worth keeping (e.g. an idle-timeout
-        // override). Resuming a session whose cwd we don't know about
-        // would hang claude on a missing jsonl, so resume keys still need
-        // the full pair; but a bare timeout override is fine on its own.
+
+        // Old format (bare chatId): migrate to claude-scoped key
+        const storeKey = isSessionKey(key) ? key : sessionKey('claude', key);
+
         const sessionId = typeof entry.sessionId === 'string' ? entry.sessionId : undefined;
         const cwd = typeof entry.cwd === 'string' ? entry.cwd : undefined;
         const idleTimeoutMinutes =
           typeof entry.idleTimeoutMinutes === 'number' ? entry.idleTimeoutMinutes : undefined;
         const hasSession = sessionId !== undefined && cwd !== undefined;
+
         if (!hasSession && idleTimeoutMinutes === undefined) continue;
-        this.data[chatId] = {
-          ...(sessionId !== undefined ? { sessionId } : {}),
-          ...(cwd !== undefined ? { cwd } : {}),
-          updatedAt: entry.updatedAt,
-          ...(idleTimeoutMinutes !== undefined ? { idleTimeoutMinutes } : {}),
-        };
+
+        // Settings on bare keys live alongside agent-scoped session keys
+        if (isSessionKey(key)) {
+          this.data[storeKey] = {
+            ...(sessionId !== undefined ? { sessionId } : {}),
+            ...(cwd !== undefined ? { cwd } : {}),
+            updatedAt: entry.updatedAt,
+          };
+        } else {
+          this.data[storeKey] = {
+            ...(sessionId !== undefined ? { sessionId } : {}),
+            ...(cwd !== undefined ? { cwd } : {}),
+            updatedAt: entry.updatedAt,
+            ...(idleTimeoutMinutes !== undefined ? { idleTimeoutMinutes } : {}),
+          };
+        }
       }
     } catch (err) {
       if ((err as NodeJS.ErrnoException).code === 'ENOENT') return;
@@ -58,44 +76,39 @@ export class SessionStore {
     }
   }
 
-  /**
-   * Return the session id for this chat if it was created in the given cwd.
-   * Sessions recorded in a different cwd are stale — claude can't resume
-   * them from a different working directory.
-   */
-  resumeFor(chatId: string, cwd: string): string | undefined {
-    const entry = this.data[chatId];
+  resumeFor(agentId: string, chatId: string, cwd: string): string | undefined {
+    const entry = this.data[sessionKey(agentId, chatId)];
     if (!entry) return undefined;
     if (entry.cwd !== cwd) return undefined;
     return entry.sessionId;
   }
 
-  getRaw(chatId: string): SessionEntry | undefined {
-    return this.data[chatId];
+  getRaw(agentId: string, chatId: string): SessionEntry | undefined {
+    return this.data[sessionKey(agentId, chatId)];
   }
 
-  set(chatId: string, sessionId: string, cwd: string): void {
-    // Preserve idleTimeoutMinutes across run starts — it's a per-scope
-    // preference, not per-run-instance state. /new (clear) wipes it.
-    const prev = this.data[chatId];
-    this.data[chatId] = {
+  set(agentId: string, chatId: string, sessionId: string, cwd: string): void {
+    const key = sessionKey(agentId, chatId);
+    const prev = this.data[key];
+    this.data[key] = {
       sessionId,
       cwd,
       updatedAt: Date.now(),
-      ...(prev?.idleTimeoutMinutes !== undefined
-        ? { idleTimeoutMinutes: prev.idleTimeoutMinutes }
-        : {}),
     };
     this.schedulePersist();
   }
 
   clear(chatId: string): void {
-    if (!(chatId in this.data)) return;
-    delete this.data[chatId];
-    this.schedulePersist();
+    let changed = false;
+    for (const key of Object.keys(this.data)) {
+      if (key === chatId || key.endsWith(`:${chatId}`)) {
+        delete this.data[key];
+        changed = true;
+      }
+    }
+    if (changed) this.schedulePersist();
   }
 
-  /** Per-scope idle-timeout override. `undefined` means no override set. */
   getIdleTimeoutMinutes(chatId: string): number | undefined {
     return this.data[chatId]?.idleTimeoutMinutes;
   }
@@ -111,8 +124,6 @@ export class SessionStore {
     this.schedulePersist();
   }
 
-  /** Remove the override so this scope falls back to the global default.
-   * Returns true if something was actually removed. */
   clearIdleTimeoutOverride(chatId: string): boolean {
     const prev = this.data[chatId];
     if (!prev || prev.idleTimeoutMinutes === undefined) return false;

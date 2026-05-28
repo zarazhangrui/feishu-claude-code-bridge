@@ -44,6 +44,7 @@ import { PendingQueue } from './pending-queue';
 import { ProcessPool } from './process-pool';
 import { fetchQuotedContext, renderQuotedBlock, type QuotedContext } from './quote';
 import { addWorkingReaction, removeReaction } from './reaction';
+import { classifyReservedExternalMessage } from './reserved-external-message';
 
 const DEBOUNCE_MS = 600;
 
@@ -403,6 +404,20 @@ async function intakeMessage(deps: IntakeDeps): Promise<void> {
     !msg.mentionedBot
   ) {
     log.info('intake', 'skip-no-mention', { scope, chatType: msg.chatType });
+    return;
+  }
+
+  // External orchestration sidecars may also listen in the same group.
+  // Reserve their protocol-looking messages so they do not become ordinary
+  // prompts for the local Claude agent.
+  const reservedExternalReason = msg.chatType !== 'p2p'
+    ? classifyReservedExternalMessage(msg.content)
+    : undefined;
+  if (reservedExternalReason) {
+    log.info('intake', 'skip-reserved-external-message', {
+      scope,
+      reason: reservedExternalReason,
+    });
     return;
   }
 

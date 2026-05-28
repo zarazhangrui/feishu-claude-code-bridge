@@ -98,6 +98,8 @@ Daemon logs go to `~/.lark-channel/logs/daemon-stdout.log` and `daemon-stderr.lo
 | `/help` | Help card |
 | Any other `/xxx` | Forwarded verbatim to Claude |
 
+Reserved external orchestration messages in group chats are ignored by this bridge instead of being sent to Claude: `/study`, `/stop study`, and messages tagged like `[study-room:...]` or `[orchestrator:...]`. This lets sidecar tools coordinate multiple bot agents in the same group without duplicate Claude runs.
+
 **Reply policy**: in a DM, the bot replies to anything. In a **group (including topic groups), the bot only replies when `@`-mentioned** (default since 0.1.22); unmentioned messages are ignored. `@all` is never answered. Cloud-doc comments must mention the bot. To restore the older "always answer in groups" behaviour: `/config` → "Require @bot in groups" → No.
 
 ## Data directories

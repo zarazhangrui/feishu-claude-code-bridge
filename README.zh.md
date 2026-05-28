@@ -98,6 +98,8 @@ daemon 的 stdout / stderr 写到 `~/.lark-channel/logs/daemon-stdout.log` 和 `
 | `/help` | 帮助卡片 |
 | 其它 `/xxx` | 原样交给 Claude |
 
+群聊中的外部编排保留消息会被 bridge 忽略，不会送进 Claude：`/study`、`/stop study`，以及形如 `[study-room:...]` 或 `[orchestrator:...]` 的消息。这样外部 sidecar 工具可以在同一个群里协调多个 bot agent，而不会触发重复的 Claude run。
+
 **消息策略**：私聊 = 不需要 @，任何消息都回；**群（含话题群）= 默认要 @bot 才回**（0.1.22 起的新默认），不 @ 时 bot 完全沉默；@全员永远不响应；云文档评论必须 @bot。要恢复"群里也不强制 @"的老行为：`/config` → "群里需要 @ bot" → 选"否"。
 
 ## 数据目录
